@@ -10,6 +10,7 @@ from __future__ import annotations
 from rdkit import Chem
 
 from chemistree.fragment import Fragment
+from chemistree.functional_groups import functional_group_name
 
 # Curated common fragments: SMILES (port as bare ``*``) -> name. Keys are
 # canonicalized at import so lookups are label- and layout-independent. Extend
@@ -119,11 +120,24 @@ _RING_SYSTEMS = [(Chem.MolFromSmiles(smi), name) for smi, name in _RING_SYSTEM_S
 
 
 def name_fragment(fragment: Fragment) -> str | None:
-    """Common name for a fragment: exact curated match, then ring system, else None."""
+    """Common name for a fragment.
+
+    Tries, in order: an exact curated substituent match, the fragment's ring
+    system, then the functional group it contains.
+
+    Args:
+        fragment: The fragment to name.
+
+    Returns:
+        The common name, or None if no strategy recognizes it.
+    """
     exact = _NAMES.get(_canonical_key(fragment.mol))
     if exact is not None:
         return exact
-    return _ring_system_name(fragment.mol)
+    ring = _ring_system_name(fragment.mol)
+    if ring is not None:
+        return ring
+    return functional_group_name(fragment.mol)
 
 
 def _ring_system_name(mol: Chem.Mol) -> str | None:
@@ -145,7 +159,11 @@ def _ring_system_name(mol: Chem.Mol) -> str | None:
 def classify_fragment(fragment: Fragment) -> str:
     """Coarse chemical class from atom composition.
 
-    Returns one of ``aromatic``, ``heteroaromatic``, ``alkyl``, or ``other``.
+    Args:
+        fragment: The fragment to classify.
+
+    Returns:
+        One of ``aromatic``, ``heteroaromatic``, ``alkyl``, or ``other``.
     """
     heavy = [a for a in fragment.mol.GetAtoms() if a.GetAtomicNum() > 1]
     if not heavy:

@@ -13,6 +13,7 @@ from typing import Callable
 from rdkit import Chem
 
 from chemistree.fragment import Fragment
+from chemistree.functional_groups import protects_bond
 from chemistree.tree import Edge, FragmentNode, FragmentTree
 
 BondSelector = Callable[[Chem.Mol, Chem.Bond], bool]
@@ -43,6 +44,8 @@ def should_break(mol: Chem.Mol, bond: Chem.Bond) -> bool:
 
     Breaks a single, acyclic bond when either endpoint is a ring atom or the bond
     is a functional-group boundary (exactly one endpoint inside a matched group).
+    Bonds internal to a recognized functional group are kept, so groups like
+    esters and amides stay intact as single, named units.
 
     Args:
         mol: The molecule the bond belongs to.
@@ -57,6 +60,9 @@ def should_break(mol: Chem.Mol, bond: Chem.Bond) -> bool:
     a, b = bond.GetBeginAtom(), bond.GetEndAtom()
     if a.GetAtomicNum() <= 1 or b.GetAtomicNum() <= 1:
         return False  # never break bonds to ports (dummies) or hydrogens
+
+    if protects_bond(mol, bond):
+        return False  # keep functional groups intact
 
     if a.IsInRing() or b.IsInRing():
         return True

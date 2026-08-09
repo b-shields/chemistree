@@ -32,8 +32,11 @@
   focused on what matters:
   - Lead with a one-line summary. That alone is the whole docstring when the
     signature already speaks for itself.
-  - Add `Args:` / `Returns:` / `Raises:` sections only when they carry non-obvious
-    information — never to restate types or the obvious.
+  - Public functions and methods document their `Args:` and `Returns:` (and
+    `Raises:` when they raise) — the public API is worth spelling out in full.
+  - A private helper, or a no-argument method/property, may stay a one-line
+    summary; add sections there only to clarify something non-obvious. Never
+    restate types or the obvious.
   - Dunder/protocol methods (`__init__`, `__repr__`, `__post_init__`, …) are
     covered by the class docstring and don't need their own.
 

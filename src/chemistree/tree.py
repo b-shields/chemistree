@@ -27,7 +27,11 @@ class FragmentNode:
         return self.history[-1]
 
     def push(self, fragment: Fragment) -> None:
-        """Record a new snapshot as the current fragment."""
+        """Record a new snapshot as the current fragment.
+
+        Args:
+            fragment: The snapshot to make current.
+        """
         self.history.append(fragment)
 
     def undo(self) -> None:
@@ -76,11 +80,25 @@ class FragmentTree:
         self._next_id += 1
 
     def node(self, node_id: int) -> FragmentNode:
-        """Look up a node by its stable id."""
+        """Look up a node by its stable id.
+
+        Args:
+            node_id: The id assigned when the tree was built.
+
+        Returns:
+            The node with that id.
+        """
         return self._by_id[node_id]
 
     def neighbors(self, node: FragmentNode) -> list[tuple[Edge, FragmentNode]]:
-        """Edges incident to ``node`` paired with the node on the other side."""
+        """Edges incident to a node, paired with the node on the other side.
+
+        Args:
+            node: The node whose incident edges to return.
+
+        Returns:
+            An ``(edge, other node)`` pair for each edge touching ``node``.
+        """
         out = []
         for edge in self.edges:
             if edge.node_a is node:
@@ -94,7 +112,14 @@ class FragmentTree:
         return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
 
     def annotations(self, *, atoms: bool = False) -> TreeAnnotation:
-        """A serializable, agent-facing description of the tree."""
+        """A serializable, agent-facing description of the tree.
+
+        Args:
+            atoms: Include per-atom detail on each node.
+
+        Returns:
+            The tree annotation.
+        """
         from chemistree.annotations import annotate
 
         return annotate(self, atoms=atoms)
