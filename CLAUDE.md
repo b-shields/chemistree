@@ -44,7 +44,9 @@
       """
   ```
 
-- Comments explain *why*, not *what*. Use them sparingly — a line or two, never a paragraph. Let clear names and structure carry the rest.
+- Comments either (a) explain a non-obvious *why*, or (b) signpost the steps of a
+  longer function with a brief step-marker header. Keep both terse — a line or two,
+  never a paragraph. Let clear names and structure carry the rest.
 - Prefer explicit over clever. Readability first.
 - Keep imports at module top, sorted (ruff handles ordering).
 

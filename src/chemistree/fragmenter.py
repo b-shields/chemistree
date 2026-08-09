@@ -76,10 +76,13 @@ def fragment(mol: Chem.Mol, selector: BondSelector = should_break) -> FragmentTr
         The resulting fragment tree.
     """
     mol = Chem.Mol(mol)
+
+    # Identify breakable bonds
     bonds = [b.GetIdx() for b in mol.GetBonds() if selector(mol, b)]
     if not bonds:
         return FragmentTree(nodes=[FragmentNode(Fragment(mol))], edges=[])
 
+    # Fragment on breakable bonds (coordinate preserving)
     labels = list(range(1, len(bonds) + 1))
     broken = Chem.FragmentOnBonds(
         mol, bonds, addDummies=True, dummyLabels=[(la, la) for la in labels]
@@ -87,13 +90,16 @@ def fragment(mol: Chem.Mol, selector: BondSelector = should_break) -> FragmentTr
     pieces = Chem.GetMolFrags(broken, asMols=True, sanitizeFrags=True)
     nodes = [FragmentNode(Fragment(p)) for p in pieces]
 
+    # Build nodes
     label_to_nodes: dict[int, list[FragmentNode]] = defaultdict(list)
     for node in nodes:
         for port in node.current.ports:
             label_to_nodes[port.label].append(node)
 
+    # Build edges
     edges = [
         Edge(label, na, nb, Chem.BondType.SINGLE)
         for label, (na, nb) in label_to_nodes.items()
     ]
+
     return FragmentTree(nodes=nodes, edges=edges)
