@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "chemistree"
+version = "0.1.0"
+description = "Natural-language editing of molecular structures via tree-based fragment representation"
+authors = ["Benjamin J. Shields"]
+readme = "README.md"
+packages = [{include = "chemistree", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.14"
+rdkit = "^2025.9"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0"
+pytest-cov = "^7.0"
+black = "^26.0"
+ruff = "^0.15"
+mypy = "^2.0"
+pre-commit = "^4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
