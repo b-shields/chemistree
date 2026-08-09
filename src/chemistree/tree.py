@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from rdkit import Chem
 
 from chemistree.fragment import Fragment
+
+if TYPE_CHECKING:
+    from chemistree.annotations import TreeAnnotation
 
 
 class FragmentNode:
@@ -15,6 +19,7 @@ class FragmentNode:
 
     def __init__(self, fragment: Fragment):
         self.history: list[Fragment] = [fragment]
+        self.id: int | None = None  # assigned by the owning FragmentTree
 
     @property
     def current(self) -> Fragment:
@@ -57,13 +62,41 @@ class FragmentTree:
     nodes: list[FragmentNode] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self._next_id = 0
+        self._by_id: dict[int, FragmentNode] = {}
+        for node in self.nodes:
+            self._register(node)
+
+    def _register(self, node: FragmentNode) -> None:
+        """Assign a stable id so nodes can be referenced across edits."""
+        node.id = self._next_id
+        self._by_id[node.id] = node
+        self._next_id += 1
+
+    def node(self, node_id: int) -> FragmentNode:
+        """Look up a node by its stable id."""
+        return self._by_id[node_id]
+
+    def neighbors(self, node: FragmentNode) -> list[tuple[Edge, FragmentNode]]:
+        """Edges incident to ``node`` paired with the node on the other side."""
+        out = []
+        for edge in self.edges:
+            if edge.node_a is node:
+                out.append((edge, edge.node_b))
+            elif edge.node_b is node:
+                out.append((edge, edge.node_a))
+        return out
+
     def leaves(self) -> list[FragmentNode]:
         """Nodes with at most one edge."""
-        degree: dict[int, int] = defaultdict(int)
-        for edge in self.edges:
-            degree[id(edge.node_a)] += 1
-            degree[id(edge.node_b)] += 1
-        return [n for n in self.nodes if degree[id(n)] <= 1]
+        return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
+
+    def annotations(self, *, atoms: bool = False) -> TreeAnnotation:
+        """A serializable, agent-facing description of the tree."""
+        from chemistree.annotations import annotate
+
+        return annotate(self, atoms=atoms)
 
     def reconstruct(self) -> Chem.Mol:
         """Fuse all current fragments back into a single molecule.
