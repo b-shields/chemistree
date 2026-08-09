@@ -17,6 +17,9 @@
 - Write commit messages about *what changed and why* — never about who or what
   authored the change. No tool attribution, no co-author trailers, no "generated
   by" lines.
+- Commit frequently, in small logical units.
+- Never commit code that hasn't passed its unit tests. pre-commit does not run
+  pytest — run it yourself first.
 
 ## Coding guidelines
 
