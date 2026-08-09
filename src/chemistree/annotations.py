@@ -70,16 +70,16 @@ class TreeAnnotation:
 
     def to_markdown(self) -> str:
         """Readable menu, one line per node (plus atoms when present)."""
+        label_of = {n.id: (n.name or n.classification) for n in self.nodes}
         lines = []
         for node in self.nodes:
-            label = node.name or node.classification
             line = (
-                f"- **[{node.id}] {label}** `{node.smiles}` "
+                f"- **[{node.id}] {label_of[node.id]}** `{node.smiles}` "
                 f"({node.formula}) — {node.role}"
             )
             if node.neighbors:
                 attached = ", ".join(
-                    f"[{n.node_id}] {n.name or '?'}" for n in node.neighbors
+                    f"[{n.node_id}] {label_of[n.node_id]}" for n in node.neighbors
                 )
                 line += f", attached to {attached}"
             lines.append(line)
