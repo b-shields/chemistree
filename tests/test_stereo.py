@@ -1,16 +1,13 @@
 """Stereochemistry: swaps conserve chiral volume unless inversion is stated."""
 
 from rdkit import Chem
-from rdkit.Chem import AllChem
 
-from chemistree import fragment, swap
+from chemistree import fragment, prepare_molecule, swap
 from chemistree.geometry import chiral_volume
 
 
 def _embed(smiles: str) -> Chem.Mol:
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
-    AllChem.EmbedMolecule(mol, randomSeed=7)
-    return mol
+    return prepare_molecule(smiles)
 
 
 def _sign(x: float) -> int:

@@ -2,16 +2,14 @@
 
 import pytest
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors
 
-from chemistree import fragment, swap
+from chemistree import fragment, prepare_molecule, swap
 
 
 def _embed(smiles: str) -> Chem.Mol:
     """A molecule with explicit Hs and a 3D conformer (the 3D edit path)."""
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
-    AllChem.EmbedMolecule(mol, randomSeed=7)
-    return mol
+    return prepare_molecule(smiles)
 
 
 def _heavy(mol: Chem.Mol) -> int:
@@ -111,7 +109,7 @@ def test_swap_preserves_untouched_ring_coordinates():
 
 
 def test_swap_without_conformer_is_connectivity_only():
-    tree = fragment(Chem.MolFromSmiles("Cc1ccccc1"))  # no 3D coords
+    tree = fragment(prepare_molecule("Cc1ccccc1", three_d=False))  # no 3D coords
     swap(_leaf(tree, 1), "[*]Cl")
     assert _product_smiles(tree) == Chem.CanonSmiles("Clc1ccccc1")
 
