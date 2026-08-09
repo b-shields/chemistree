@@ -14,6 +14,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdFMCS, rdMolAlign
 
 from chemistree.fragment import Fragment
+from chemistree.geometry import chiral_volume
 from chemistree.tree import FragmentNode
 
 _EMBED_SEED = 0xF00D  # fixed so placement is reproducible
@@ -75,7 +76,10 @@ def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     new = Chem.AddHs(new)
     AllChem.EmbedMolecule(new, randomSeed=_EMBED_SEED)
 
-    fixed = _fixed_atoms(old, new)
+    correspondence = _mcs_correspondence(old.mol, new)
+    fixed, anchors = _fixed_atoms(old, new, correspondence)
+    _free_inverted_centers(old, new, correspondence, anchors, fixed)
+
     old_conf = old.mol.GetConformer()
     rdMolAlign.AlignMol(new, old.mol, atomMap=[(ni, oi) for ni, oi in fixed.items()])
     conf = new.GetConformer()
@@ -86,22 +90,64 @@ def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     return new
 
 
-def _fixed_atoms(old: Fragment, new: Chem.Mol) -> dict[int, int]:
+def _fixed_atoms(
+    old: Fragment, new: Chem.Mol, correspondence: list[tuple[int, int]]
+) -> tuple[dict[int, int], set[int]]:
     """Map new-group atom indices to the old positions they overlay.
 
     Shared atoms come from the MCS; the port anchors and dummies are always
-    pinned so the reconnection geometry is preserved.
+    pinned so the reconnection geometry is preserved. Returns the fixed map and
+    the set of port-anchor indices (which stereo handling must never free).
     """
-    fixed = {ni: oi for oi, ni in _mcs_correspondence(old.mol, new)}
+    fixed = {ni: oi for oi, ni in correspondence}
+    anchors = set()
     for port in old.ports:
         dummy = next(
             a
             for a in new.GetAtoms()
             if a.GetAtomicNum() == 0 and a.GetIsotope() == port.label
         )
+        anchor = dummy.GetNeighbors()[0].GetIdx()
         fixed[dummy.GetIdx()] = port.dummy_idx
-        fixed[dummy.GetNeighbors()[0].GetIdx()] = port.anchor_idx
-    return fixed
+        fixed[anchor] = port.anchor_idx
+        anchors.add(anchor)
+    return fixed, anchors
+
+
+def _free_inverted_centers(
+    old: Fragment,
+    new: Chem.Mol,
+    correspondence: list[tuple[int, int]],
+    anchors: set[int],
+    fixed: dict[int, int],
+) -> None:
+    """Release matched stereocenters the new group explicitly inverts.
+
+    Stereo is conserved by default: fixing a matched center to its old
+    coordinates preserves its chiral volume. When the new group instead states
+    the opposite configuration at a matched center, that center (and its
+    non-anchor matched neighbors) is dropped from the fixed set so the embedded
+    geometry stands. Port anchors are always conserved.
+    """
+    old_conf = old.mol.GetConformer()
+    new_conf = new.GetConformer()
+    old_of_new = {ni: oi for oi, ni in correspondence}
+    for oi, ni in correspondence:
+        atom = new.GetAtomWithIdx(ni)
+        if atom.GetChiralTag() == Chem.ChiralType.CHI_UNSPECIFIED or ni in anchors:
+            continue
+        matched = [n.GetIdx() for n in atom.GetNeighbors() if n.GetIdx() in old_of_new]
+        if len(matched) < 3:
+            continue
+        n3 = matched[:3]
+        o3 = [old_of_new[x] for x in n3]
+        stated = chiral_volume(new_conf, ni, *n3)
+        original = chiral_volume(old_conf, oi, *o3)
+        if stated * original < 0:
+            fixed.pop(ni, None)
+            for x in matched:
+                if x not in anchors:
+                    fixed.pop(x, None)
 
 
 def _mcs_correspondence(a: Chem.Mol, b: Chem.Mol) -> list[tuple[int, int]]:
