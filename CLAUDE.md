@@ -52,6 +52,10 @@
           ValueError: If the trees share incompatible root fragments.
       """
   ```
+- Write docstrings and comments in plain, direct technical English (in the spirit
+  of ASD-STE100, not full compliance): active voice, present tense, short
+  single-clause sentences, plain words. Use **one term per concept** — *fragment,
+  node, port, edge, scaffold, leaf* — and don't swap in loose synonyms.
 - The `_` prefix means module-private: a `_name` must not be imported by another
   module. The moment another module needs it, drop the `_` — it is now public API.
 
