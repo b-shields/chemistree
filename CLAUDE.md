@@ -26,7 +26,16 @@
 - Follow PEP 8; formatting is enforced by black (line length 88).
 - Write clean, small functions that do one thing. Prefer pure functions.
 - Use type hints on all public functions.
-- Google-style docstrings on public modules, classes, and functions:
+- Google-style docstrings on **every** function and method — public or private.
+  A helper still has an API to explain; skipping its docstring because the name
+  starts with `_` is exactly the inconsistency to avoid. Keep them compact and
+  focused on what matters:
+  - Lead with a one-line summary. That alone is the whole docstring when the
+    signature already speaks for itself.
+  - Add `Args:` / `Returns:` / `Raises:` sections only when they carry non-obvious
+    information — never to restate types or the obvious.
+  - Dunder/protocol methods (`__init__`, `__repr__`, `__post_init__`, …) are
+    covered by the class docstring and don't need their own.
 
   ```python
   def merge(tree: FragmentTree, other: FragmentTree) -> FragmentTree:
@@ -36,13 +45,12 @@
           tree: Base tree to merge into.
           other: Tree whose fragments are grafted onto ``tree``.
 
-      Returns:
-          A new tree containing fragments from both inputs.
-
       Raises:
           ValueError: If the trees share incompatible root fragments.
       """
   ```
+- The `_` prefix means module-private: a `_name` must not be imported by another
+  module. The moment another module needs it, drop the `_` — it is now public API.
 
 - Comments either (a) explain a non-obvious *why*, or (b) signpost the steps of a
   longer function with a brief step-marker header. Keep both terse — a line or two,

@@ -45,6 +45,11 @@ def swap(node: FragmentNode, group: str | Chem.Mol) -> None:
 
 
 def _parse_group(group: str | Chem.Mol) -> Chem.Mol:
+    """Parse a swap group (SMILES or Mol) and require at least one port.
+
+    Raises:
+        ValueError: If it cannot be parsed or has no dummy attachment.
+    """
     mol = Chem.MolFromSmiles(group) if isinstance(group, str) else Chem.Mol(group)
     if mol is None:
         raise ValueError(f"could not parse group: {group!r}")
@@ -54,6 +59,7 @@ def _parse_group(group: str | Chem.Mol) -> Chem.Mol:
 
 
 def _dummies(mol: Chem.Mol) -> list[Chem.Atom]:
+    """The dummy (port) atoms of a molecule."""
     return [a for a in mol.GetAtoms() if a.GetAtomicNum() == 0]
 
 

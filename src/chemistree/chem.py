@@ -45,6 +45,11 @@ def prepare_molecule(
 
 
 def _as_mol(mol: str | Chem.Mol) -> Chem.Mol:
+    """Return a fresh, sanitized molecule from a SMILES string or Mol.
+
+    Raises:
+        ValueError: If a SMILES string cannot be parsed.
+    """
     if isinstance(mol, str):
         parsed = Chem.MolFromSmiles(mol)
     else:

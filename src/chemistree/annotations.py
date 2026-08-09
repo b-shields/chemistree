@@ -112,6 +112,7 @@ def annotate(
 def _annotate_node(
     tree: FragmentTree, node: FragmentNode, atoms: bool, namer: Namer
 ) -> NodeAnnotation:
+    """Describe one node: fragment identity, role, and neighbor links."""
     fragment = node.current
     mol = fragment.mol
     ports = [port.label for port in fragment.ports]
@@ -140,6 +141,7 @@ def _id(node: FragmentNode) -> int:
 
 
 def _atom_annotations(mol: Chem.Mol) -> list[AtomAnnotation]:
+    """Per-atom detail for the heavy atoms of a fragment."""
     return [
         AtomAnnotation(
             index=a.GetIdx(),
@@ -165,6 +167,7 @@ def _formula(mol: Chem.Mol) -> str:
 
 
 def _hill(counts: Counter[str]) -> str:
+    """Format element counts in Hill notation (C, H, then alphabetical)."""
     parts = []
     for symbol in ("C", "H"):
         n = counts.pop(symbol, 0)

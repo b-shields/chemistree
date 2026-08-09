@@ -23,6 +23,7 @@ class FragmentNode:
 
     @property
     def current(self) -> Fragment:
+        """The current (top-of-stack) fragment snapshot."""
         return self.history[-1]
 
     def push(self, fragment: Fragment) -> None:
