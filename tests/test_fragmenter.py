@@ -38,6 +38,15 @@ def test_carbonyl_is_a_functional_group_boundary():
     assert _breakable_count("CC(=O)c1ccccc1") == 2
 
 
+def test_explicit_hydrogens_are_not_broken():
+    # With explicit Hs, ring C-H bonds have a ring-atom endpoint but must not break.
+    mol = Chem.AddHs(Chem.MolFromSmiles("Cc1ccccc1"))
+    tree = fragment(mol)
+    assert len(tree.nodes) == 2  # methyl + ring; every H stays attached
+    rebuilt = Chem.RemoveHs(tree.reconstruct())
+    assert Chem.MolToSmiles(rebuilt) == Chem.CanonSmiles("Cc1ccccc1")
+
+
 def test_toluene_fragments_into_two_nodes():
     tree = fragment(Chem.MolFromSmiles("Cc1ccccc1"))
     assert len(tree.nodes) == 2

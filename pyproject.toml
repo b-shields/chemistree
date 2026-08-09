@@ -9,6 +9,7 @@ packages = [{include = "chemistree", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.14"
 rdkit = "^2025.9"
+numpy = "^2.5.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0"

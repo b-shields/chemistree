@@ -55,8 +55,8 @@ def should_break(mol: Chem.Mol, bond: Chem.Bond) -> bool:
         return False
 
     a, b = bond.GetBeginAtom(), bond.GetEndAtom()
-    if a.GetAtomicNum() == 0 or b.GetAtomicNum() == 0:
-        return False  # a port, not a real bond
+    if a.GetAtomicNum() <= 1 or b.GetAtomicNum() <= 1:
+        return False  # never break bonds to ports (dummies) or hydrogens
 
     if a.IsInRing() or b.IsInRing():
         return True
