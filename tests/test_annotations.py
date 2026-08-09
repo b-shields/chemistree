@@ -70,8 +70,8 @@ def test_to_markdown_mentions_name_and_smiles():
 
 
 def test_to_markdown_falls_back_to_classification_never_none():
-    # Unnamed neighbors (a carbonyl, an amine) show a class, never a bare "?".
-    md = annotate(_tree("CC(=O)Nc1ccccc1", three_d=False)).to_markdown()
+    # An unnamed fragment (the boronic acid) shows its class, never a bare "?".
+    md = annotate(_tree("OB(O)c1ccccc1", three_d=False)).to_markdown()
     assert "?" not in md
     assert "other" in md
 

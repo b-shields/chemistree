@@ -58,3 +58,15 @@ def test_leaves_excludes_internal_node():
     # 1,2,4-trisubstituted benzene: ring is internal (degree 3), 3 substituent leaves.
     tree = fragment(Chem.MolFromSmiles("Cc1ccc(C)c(C)c1"))
     assert len(tree.leaves()) == 3
+
+
+def test_largest_fragment_is_indexed_first():
+    # The core (largest fragment) should get id 0.
+    tree = fragment(Chem.MolFromSmiles("CC(=O)Oc1ccccc1C(=O)O"))  # aspirin
+    core = tree.node(0).current.mol
+
+    def heavy(mol):
+        return sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() > 1)
+
+    assert heavy(core) == max(heavy(n.current.mol) for n in tree.nodes)
+    assert any(a.GetIsAromatic() for a in core.GetAtoms())  # the benzene ring

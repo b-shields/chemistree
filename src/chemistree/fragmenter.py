@@ -102,4 +102,13 @@ def fragment(mol: Chem.Mol, selector: BondSelector = should_break) -> FragmentTr
         for label, (na, nb) in label_to_nodes.items()
     ]
 
+    # Order core-first so the largest fragment gets id 0
+    nodes.sort(key=_core_first)
     return FragmentTree(nodes=nodes, edges=edges)
+
+
+def _core_first(node: FragmentNode) -> tuple[int, int, str]:
+    """Sort key placing the largest, most-connected fragment first."""
+    fragment = node.current
+    heavy = sum(1 for a in fragment.mol.GetAtoms() if a.GetAtomicNum() > 1)
+    return (-heavy, -len(fragment.ports), fragment.smiles)
