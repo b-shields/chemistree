@@ -1,5 +1,6 @@
 """Natural-language editing of molecules via tree-based fragment representation."""
 
+from chemistree.edits import swap
 from chemistree.fragment import Fragment, Port
 from chemistree.fragmenter import fragment, should_break
 from chemistree.tree import Edge, FragmentNode, FragmentTree
@@ -14,4 +15,5 @@ __all__ = [
     "FragmentTree",
     "fragment",
     "should_break",
+    "swap",
 ]
