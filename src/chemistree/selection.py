@@ -11,32 +11,13 @@ from typing import Callable
 
 from rdkit import Chem
 
+from chemistree.errors import Ambiguous, NotFound
 from chemistree.naming import classify_fragment, name_fragment
 from chemistree.tree import FragmentNode, FragmentTree
 
 POSITION_SYNONYMS = {"ortho": 1, "meta": 2, "para": 3}
 
 SitePredicate = Callable[[Chem.Mol, int], bool]
-
-
-class ResolutionError(Exception):
-    """A reference could not be resolved to a single node or atom."""
-
-
-class NotFound(ResolutionError):
-    """No candidate matched the reference."""
-
-
-class Ambiguous(ResolutionError):
-    """More than one candidate matched the reference.
-
-    Attributes:
-        candidates: Ids of the nodes that matched.
-    """
-
-    def __init__(self, message: str, candidates: list[int]):
-        super().__init__(message)
-        self.candidates = candidates
 
 
 def select(

@@ -14,8 +14,10 @@ from chemistree.annotations import annotate
 from chemistree.chem import prepare_molecule
 from chemistree.edits import add_substituent
 from chemistree.edits import swap as _swap_fragment
+from chemistree.errors import NotFound
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
+from chemistree.receptor import Receptor
 from chemistree.selection import resolve_site, select, select_one
 
 
@@ -37,7 +39,7 @@ class DesignSession:
             three_d: Prepare the ligand with explicit hydrogens and a 3D conformer.
         """
         self.tree = fragment(prepare_molecule(molecule, three_d=three_d))
-        self.receptor = receptor
+        self.receptor = Receptor(receptor) if receptor is not None else None
 
     def describe(self) -> str:
         """A readable markdown summary of the current fragments."""
@@ -124,6 +126,34 @@ class DesignSession:
             node_id: Id of the node to revert.
         """
         self.tree.node(node_id).undo()
+
+    def nearest(self, name: str, residue: str) -> int:
+        """Id of the named fragment closest to a named receptor residue.
+
+        The distance resolution lives in ``Receptor``; the session only checks its
+        preconditions and selects the candidates.
+
+        Args:
+            name: Common name of the ligand fragment (e.g. "methyl").
+            residue: Residue name in the receptor (e.g. "PHE").
+
+        Returns:
+            Id of the closest matching node.
+
+        Raises:
+            ValueError: If no receptor is loaded or the ligand lacks 3D coordinates.
+            NotFound: If no matching fragment or residue exists.
+        """
+        if self.receptor is None:
+            raise ValueError("spatial resolution needs a receptor")
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("spatial resolution needs a ligand with 3D coordinates")
+        candidates = select(self.tree, name=name)
+        if not candidates:
+            raise NotFound(f"no {name} in the ligand")
+        node = self.receptor.nearest(candidates, residue)
+        assert node.id is not None
+        return node.id
 
 
 def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:
