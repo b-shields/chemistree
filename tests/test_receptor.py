@@ -107,6 +107,13 @@ def test_abl1_nearest_disambiguates_duplicate_fragments():
     assert contact < 4.0
 
 
+def test_pocket_residues_line_the_binding_site():
+    session = _abl1_session()
+    pocket = session.receptor.pocket(session.molecule())
+    assert len(pocket) > 5
+    assert "ASP" in {residue.name for residue in pocket}  # a known contact
+
+
 def test_nearest_requires_receptor():
     session = DesignSession("Cc1ccc(C)cc1", three_d=False)
     with pytest.raises(ValueError, match="receptor"):

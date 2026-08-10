@@ -20,7 +20,9 @@ import termios
 from fastapi import WebSocket, WebSocketDisconnect
 
 # The command the terminal runs; override for testing.
-COMMAND = shlex.split(os.environ.get("CHEMISTREE_TERMINAL_CMD", "claude"))
+COMMAND = shlex.split(
+    os.environ.get("CHEMISTREE_TERMINAL_CMD", "claude --model sonnet")
+)
 
 
 async def terminal_session(socket: WebSocket) -> None:

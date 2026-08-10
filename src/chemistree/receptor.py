@@ -122,6 +122,23 @@ class Receptor:
             raise NotFound(f"no {residue} within {within:g} A of the candidates")
         return best
 
+    def pocket(self, ligand: Chem.Mol, within: float = 8.0) -> list[Residue]:
+        """Residues with any atom within a distance of the ligand.
+
+        Args:
+            ligand: The ligand molecule, posed in the receptor frame.
+            within: Distance cutoff in angstrom.
+
+        Returns:
+            The residues lining the binding site, in residue order.
+        """
+        ligand_coords = _heavy_positions(ligand)
+        return [
+            residue
+            for residue in self._residues
+            if min_distance(self._positions(residue.atoms), ligand_coords) < within
+        ]
+
     def _positions(self, atoms: tuple[int, ...]) -> np.ndarray:
         """Coordinates of the given receptor atoms as an (N, 3) array."""
         conf = self.mol.GetConformer()

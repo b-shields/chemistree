@@ -8,13 +8,21 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <style>
-    body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; }
-    h1 { font-size: 18px; margin: 0 0 12px; }
+    body {
+      font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px;
+      background: #0d0d0d; color: #ddd;
+    }
+    h1 { font-size: 18px; margin: 0 0 12px; font-weight: 500; }
+    #smiles { color: #7fd08a; font-family: monospace; }
     .row { display: flex; gap: 16px; align-items: flex-start; }
-    #mol2d { width: 420px; height: 420px; border: 1px solid #ddd; }
-    #mol3d { flex: 1; height: 420px; border: 1px solid #ddd; position: relative; }
-    #cmd { width: 520px; padding: 6px; font-family: monospace; }
-    #log { color: #555; min-height: 1.2em; }
+    #mol2d { width: 420px; height: 420px; border: 1px solid #333; }
+    #mol3d { flex: 1; height: 420px; border: 1px solid #333; position: relative; }
+    #cmd {
+      width: 520px; padding: 6px; font-family: monospace;
+      background: #1a1a1a; color: #ddd; border: 1px solid #333;
+    }
+    button { background: #1a1a1a; color: #ddd; border: 1px solid #333; padding: 6px 10px; }
+    #log { color: #888; min-height: 1.2em; }
     #terminal { height: 300px; margin-top: 12px; background: #000; padding: 6px; }
   </style>
 </head>
@@ -31,22 +39,27 @@
   </p>
   <div id="terminal"></div>
   <script>
-    const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "white" });
+    const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
     let ligand = null, receptor = null;
     async function loadReceptor() {
       const pdb = await (await fetch("/receptor")).text();
       if (pdb.trim()) receptor = viewer.addModel(pdb, "pdb");
     }
-    function showPocket() {
+    async function stylePocket() {
       if (!receptor) return;
-      const near = { byres: true, within: { distance: 8, sel: { model: ligand.getID() } } };
-      receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.3 } });
-      receptor.setStyle(near, { stick: { colorscheme: "grayCarbon", radius: 0.12 } });
+      const residues = await (await fetch("/pocket")).json();
+      const rid = receptor.getID();
+      viewer.setStyle({ model: rid }, { cartoon: { color: "spectrum", opacity: 0.25 } });
       viewer.removeAllLabels();
-      viewer.addResLabels(
-        Object.assign({ model: receptor.getID() }, near),
-        { fontSize: 11, fontColor: "black", showBackground: false }
-      );
+      const byChain = {};
+      residues.forEach((r) => ((byChain[r.chain] ||= []).push(r.resi)));
+      for (const [chain, resi] of Object.entries(byChain)) {
+        const sel = { model: rid, resi };
+        if (chain.trim()) sel.chain = chain;
+        viewer.setStyle(sel, { stick: { colorscheme: "cyanCarbon", radius: 0.14 } });
+        viewer.addResLabels(sel, { fontSize: 11, fontColor: "white", showBackground: false });
+      }
+      viewer.render();
     }
     function show(state) {
       document.getElementById("smiles").textContent = state.smiles;
@@ -54,9 +67,9 @@
       if (ligand) viewer.removeModel(ligand);
       ligand = viewer.addModel(state.molblock, "mol");
       ligand.setStyle({}, { stick: { colorscheme: "greenCarbon" } });
-      showPocket();
       viewer.zoomTo({ model: ligand.getID() });
       viewer.render();
+      stylePocket();
     }
     loadReceptor();
     const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -80,7 +93,10 @@
     });
 
     // Embedded Claude Code terminal (pty over WebSocket).
-    const term = new Terminal({ fontSize: 13, cursorBlink: true });
+    const term = new Terminal({
+      fontSize: 13, cursorBlink: true,
+      theme: { background: "#000000", foreground: "#dddddd" },
+    });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(document.getElementById("terminal"));

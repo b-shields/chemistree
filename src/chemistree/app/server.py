@@ -38,6 +38,18 @@ def receptor() -> str:
     return state.receptor_pdb
 
 
+@app.get("/pocket")
+def pocket() -> list[dict]:
+    """Binding-site residues (within 8 A of the ligand) to render as sticks."""
+    session = state.get_session()
+    if session.receptor is None:
+        return []
+    return [
+        {"chain": residue.chain, "resi": residue.number, "resn": residue.name}
+        for residue in session.receptor.pocket(session.molecule())
+    ]
+
+
 @app.post("/command")
 async def command(payload: dict) -> JSONResponse:
     """Run a command box entry against the shared session, then broadcast."""

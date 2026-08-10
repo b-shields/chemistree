@@ -24,7 +24,8 @@ def render_state(session: DesignSession) -> dict:
 
     flat = Chem.RemoveHs(Chem.Mol(mol))
     AllChem.Compute2DCoords(flat)
-    drawer = rdMolDraw2D.MolDraw2DSVG(440, 360)
+    drawer = rdMolDraw2D.MolDraw2DSVG(420, 420)
+    rdMolDraw2D.SetDarkMode(drawer)
     drawer.DrawMolecule(flat)
     drawer.FinishDrawing()
 
