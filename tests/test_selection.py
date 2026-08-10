@@ -9,8 +9,11 @@ from chemistree.selection import (
     NotFound,
     atoms_at_distance,
     attachment_atom,
+    is_free_aromatic_carbon,
     is_open_position,
     resolve_offset,
+    resolve_position,
+    resolve_site,
     select,
     select_one,
 )
@@ -89,3 +92,42 @@ def test_attachment_atom_is_the_ring_carbon_bearing_the_substituent():
     anchor = attachment_atom(tree, ring, methyl)
     atom = ring.current.mol.GetAtomWithIdx(anchor)
     assert atom.GetIsAromatic() and atom.GetAtomicNum() == 6
+
+
+def _ring_and_methyl(smiles: str):
+    tree = fragment(prepare_molecule(smiles, three_d=False))
+    ring = select_one(tree, description="phenyl", name="phenyl")
+    methyl = select_one(tree, description="methyl", name="methyl", neighbor_of=ring)
+    return tree, ring, methyl
+
+
+def test_resolve_site_para_is_unique_on_benzene():
+    tree, ring, methyl = _ring_and_methyl("Cc1ccccc1")
+    anchor = attachment_atom(tree, ring, methyl)
+    para = resolve_site(tree, ring, methyl, "para", site=is_free_aromatic_carbon)
+    dmat_distance = int(Chem.GetDistanceMatrix(ring.current.mol)[anchor][para])
+    assert dmat_distance == 3
+
+
+def test_resolve_site_meta_is_ambiguous_on_benzene():
+    tree, ring, methyl = _ring_and_methyl("Cc1ccccc1")
+    with pytest.raises(Ambiguous) as info:
+        resolve_site(tree, ring, methyl, "meta")
+    assert len(info.value.candidates) == 2  # both meta carbons are free
+
+
+def test_resolve_site_para_rejected_on_five_membered_ring():
+    tree = fragment(prepare_molecule("Cc1ccco1", three_d=False))  # 2-methylfuran
+    ring = select_one(tree, description="furan", name="furan")
+    methyl = select_one(tree, description="methyl", name="methyl", neighbor_of=ring)
+    with pytest.raises(ValueError, match="para"):
+        resolve_site(tree, ring, methyl, "para")
+
+
+def test_resolve_position_on_a_chain():
+    # "the second carbon of the butyl" — one bond in from the attachment.
+    tree = fragment(prepare_molecule("CCCCc1ccccc1", three_d=False))  # butylbenzene
+    butyl = select_one(tree, description="butyl", name="butyl")
+    anchor = butyl.current.ports[0].anchor_idx
+    second = resolve_position(butyl.current.mol, anchor, 1)
+    assert butyl.current.mol.GetAtomWithIdx(second).GetTotalNumHs() == 2  # a CH2

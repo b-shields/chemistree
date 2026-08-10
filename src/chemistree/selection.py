@@ -7,12 +7,16 @@ and chains alike. ortho/meta/para are a ring-only synonym shim over distances
 
 from __future__ import annotations
 
+from typing import Callable
+
 from rdkit import Chem
 
 from chemistree.naming import classify_fragment, name_fragment
 from chemistree.tree import FragmentNode, FragmentTree
 
 POSITION_SYNONYMS = {"ortho": 1, "meta": 2, "para": 3}
+
+SitePredicate = Callable[[Chem.Mol, int], bool]
 
 
 class ResolutionError(Exception):
@@ -198,3 +202,93 @@ def is_open_position(mol: Chem.Mol, atom: int) -> bool:
     if target.GetTotalNumHs(includeNeighbors=True) < 1:
         return False
     return not any(neighbor.GetAtomicNum() == 0 for neighbor in target.GetNeighbors())
+
+
+def is_free_aromatic_carbon(mol: Chem.Mol, atom: int) -> bool:
+    """Whether an atom is an open aromatic-carbon position (excludes ring N, O, S).
+
+    Args:
+        mol: The fragment molecule.
+        atom: Index of the candidate atom.
+
+    Returns:
+        True if the atom is aromatic carbon and a free growth site.
+    """
+    target = mol.GetAtomWithIdx(atom)
+    return (
+        target.GetIsAromatic()
+        and target.GetAtomicNum() == 6
+        and is_open_position(mol, atom)
+    )
+
+
+def resolve_position(
+    mol: Chem.Mol,
+    reference: int,
+    offset: int | str,
+    *,
+    site: SitePredicate = is_open_position,
+) -> int:
+    """Resolve a position ``offset`` bonds from a reference atom to one atom.
+
+    This is the universal step: it counts topological distance, so it addresses
+    positions on rings (with ortho/meta/para) and chains ("two carbons in") alike.
+
+    Args:
+        mol: The fragment molecule.
+        reference: Index of the atom to count from.
+        offset: A bond count, or a ring synonym (ortho/meta/para).
+        site: Constraint the target atom must satisfy.
+
+    Returns:
+        Index of the single matching atom.
+
+    Raises:
+        NotFound: If no atom at that offset satisfies the constraint.
+        Ambiguous: If more than one does.
+        ValueError: If a ring synonym is invalid for the reference's ring.
+    """
+    distance = resolve_offset(offset, ring_size=_ring_size_at(mol, reference))
+    candidates = [
+        a for a in atoms_at_distance(mol, reference, distance) if site(mol, a)
+    ]
+    if not candidates:
+        raise NotFound(f"no open position {offset} from the reference")
+    if len(candidates) > 1:
+        raise Ambiguous(
+            f"{len(candidates)} positions {offset} from the reference", candidates
+        )
+    return candidates[0]
+
+
+def resolve_site(
+    tree: FragmentTree,
+    scaffold: FragmentNode,
+    reference: FragmentNode,
+    position: int | str,
+    *,
+    site: SitePredicate = is_open_position,
+) -> int:
+    """Resolve a position on a scaffold relative to one of its substituents.
+
+    Args:
+        tree: The tree the nodes belong to.
+        scaffold: The node whose atom to resolve.
+        reference: A substituent of the scaffold to count from.
+        position: A bond count, or a ring synonym (ortho/meta/para).
+        site: Constraint the target atom must satisfy.
+
+    Returns:
+        Index (in the scaffold's current fragment) of the single matching atom.
+
+    Raises:
+        NotFound: If nothing matches. Ambiguous: If several do.
+    """
+    anchor = attachment_atom(tree, scaffold, reference)
+    return resolve_position(scaffold.current.mol, anchor, position, site=site)
+
+
+def _ring_size_at(mol: Chem.Mol, atom: int) -> int | None:
+    """Size of the smallest ring containing an atom, or None if it is acyclic."""
+    sizes = [len(ring) for ring in mol.GetRingInfo().AtomRings() if atom in ring]
+    return min(sizes) if sizes else None
