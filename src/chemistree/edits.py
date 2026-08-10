@@ -44,6 +44,57 @@ def swap(node: FragmentNode, group: str | Chem.Mol) -> None:
     node.push(Fragment(new))
 
 
+def add_substituent(node: FragmentNode, atom: int, group: str | Chem.Mol) -> None:
+    """Grow a group at an open atom of the node's fragment.
+
+    The group is attached at ``atom`` (replacing one hydrogen) and the node is
+    swapped for the augmented fragment, so its ports are preserved and the new
+    group is placed with the same MCS-overlay + UFF machinery as ``swap``.
+
+    Args:
+        node: Node whose fragment grows the group.
+        atom: Index (in the node's current fragment) of the atom to grow from.
+        group: New group as a SMILES string or Mol, with one dummy attachment.
+
+    Raises:
+        ValueError: If the group cannot be parsed or has no port.
+    """
+    augmented = _attach(node.current.mol, atom, _parse_group(group))
+    swap(node, augmented)
+
+
+def _attach(scaffold: Chem.Mol, atom: int, group: Chem.Mol) -> Chem.Mol:
+    """Bond a group's anchor to a scaffold atom, consuming one hydrogen there."""
+    hydrogens = scaffold.GetAtomWithIdx(atom).GetTotalNumHs()
+    rw = Chem.RWMol(Chem.CombineMols(scaffold, group))
+
+    offset = scaffold.GetNumAtoms()
+    g_dummy = next(
+        a.GetIdx()
+        for a in rw.GetAtoms()
+        if a.GetIdx() >= offset and a.GetAtomicNum() == 0
+    )
+    g_anchor = rw.GetAtomWithIdx(g_dummy).GetNeighbors()[0].GetIdx()
+    rw.AddBond(atom, g_anchor, Chem.BondType.SINGLE)
+
+    target = rw.GetAtomWithIdx(atom)
+    explicit_h = next(
+        (n.GetIdx() for n in target.GetNeighbors() if n.GetAtomicNum() == 1), None
+    )
+    remove = [g_dummy]
+    if explicit_h is not None:
+        remove.append(explicit_h)
+    else:
+        target.SetNumExplicitHs(max(0, hydrogens - 1))
+        target.SetNoImplicit(True)
+    for idx in sorted(remove, reverse=True):
+        rw.RemoveAtom(idx)
+
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+    return mol
+
+
 def _parse_group(group: str | Chem.Mol) -> Chem.Mol:
     """Parse a swap group (SMILES or Mol) and require at least one port.
 

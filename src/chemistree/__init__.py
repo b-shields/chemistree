@@ -8,7 +8,7 @@ from chemistree.annotations import (
     annotate,
 )
 from chemistree.chem import prepare_molecule
-from chemistree.edits import swap
+from chemistree.edits import add_substituent, swap
 from chemistree.fragment import Fragment, Port
 from chemistree.fragmenter import fragment, should_break
 from chemistree.naming import classify_fragment, name_fragment
@@ -26,6 +26,7 @@ __all__ = [
     "NodeAnnotation",
     "AtomAnnotation",
     "NeighborRef",
+    "add_substituent",
     "annotate",
     "classify_fragment",
     "fragment",
