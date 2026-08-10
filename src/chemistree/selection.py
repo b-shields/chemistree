@@ -9,7 +9,128 @@ from __future__ import annotations
 
 from rdkit import Chem
 
+from chemistree.naming import classify_fragment, name_fragment
+from chemistree.tree import FragmentNode, FragmentTree
+
 POSITION_SYNONYMS = {"ortho": 1, "meta": 2, "para": 3}
+
+
+class ResolutionError(Exception):
+    """A reference could not be resolved to a single node or atom."""
+
+
+class NotFound(ResolutionError):
+    """No candidate matched the reference."""
+
+
+class Ambiguous(ResolutionError):
+    """More than one candidate matched the reference.
+
+    Attributes:
+        candidates: Ids of the nodes that matched.
+    """
+
+    def __init__(self, message: str, candidates: list[int]):
+        super().__init__(message)
+        self.candidates = candidates
+
+
+def select(
+    tree: FragmentTree,
+    *,
+    name: str | None = None,
+    classification: str | None = None,
+    neighbor_of: FragmentNode | None = None,
+) -> list[FragmentNode]:
+    """Nodes matching every given constraint.
+
+    Args:
+        tree: The tree to search.
+        name: Required common name (see ``name_fragment``).
+        classification: Required coarse class (see ``classify_fragment``).
+        neighbor_of: Keep only nodes adjacent to this node.
+
+    Returns:
+        The matching nodes, in tree order.
+    """
+    adjacent = (
+        {other for _, other in tree.neighbors(neighbor_of)}
+        if neighbor_of is not None
+        else None
+    )
+    matches = []
+    for node in tree.nodes:
+        fragment = node.current
+        if name is not None and name_fragment(fragment) != name:
+            continue
+        if classification is not None and classify_fragment(fragment) != classification:
+            continue
+        if adjacent is not None and node not in adjacent:
+            continue
+        matches.append(node)
+    return matches
+
+
+def select_one(
+    tree: FragmentTree,
+    *,
+    description: str = "node",
+    name: str | None = None,
+    classification: str | None = None,
+    neighbor_of: FragmentNode | None = None,
+) -> FragmentNode:
+    """The single node matching the constraints, or a structured error.
+
+    Args:
+        tree: The tree to search.
+        description: Noun used in error messages (e.g. "pyridine").
+        name: Required common name.
+        classification: Required coarse class.
+        neighbor_of: Keep only nodes adjacent to this node.
+
+    Returns:
+        The unique matching node.
+
+    Raises:
+        NotFound: If no node matches.
+        Ambiguous: If more than one node matches.
+    """
+    matches = select(
+        tree, name=name, classification=classification, neighbor_of=neighbor_of
+    )
+    if not matches:
+        raise NotFound(f"no {description} found")
+    if len(matches) > 1:
+        raise Ambiguous(
+            f"{len(matches)} candidates match {description}",
+            [n.id for n in matches if n.id is not None],
+        )
+    return matches[0]
+
+
+def attachment_atom(
+    tree: FragmentTree, scaffold: FragmentNode, substituent: FragmentNode
+) -> int:
+    """The scaffold atom that bears a given substituent.
+
+    Args:
+        tree: The tree the nodes belong to.
+        scaffold: The node carrying the substituent.
+        substituent: The adjacent node.
+
+    Returns:
+        Index (in the scaffold's current fragment) of the atom the substituent
+        attaches to.
+
+    Raises:
+        NotFound: If the substituent is not attached to the scaffold.
+    """
+    for edge, other in tree.neighbors(scaffold):
+        if other is substituent:
+            for port in scaffold.current.ports:
+                if port.label == edge.label:
+                    return port.anchor_idx
+    raise NotFound("substituent is not attached to scaffold")
 
 
 def resolve_offset(spec: int | str, ring_size: int | None = None) -> int:
