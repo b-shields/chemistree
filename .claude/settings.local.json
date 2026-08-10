@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "chemistree"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__chemistree__swap"
+    ]
+  }
+}

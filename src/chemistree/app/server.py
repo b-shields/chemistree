@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from chemistree.app import state
 from chemistree.app.commands import run_command
 from chemistree.app.render import render_state
+from chemistree.app.terminal import terminal_session
 
 app = FastAPI()
 _PAGE = (Path(__file__).parent / "index.html").read_text()
@@ -48,6 +49,12 @@ async def command(payload: dict) -> JSONResponse:
     return JSONResponse(
         {"message": message, "state": render_state(state.get_session())}
     )
+
+
+@app.websocket("/terminal")
+async def terminal(socket: WebSocket) -> None:
+    """Bridge an embedded terminal (Claude Code) to a pty."""
+    await terminal_session(socket)
 
 
 @app.websocket("/ws")

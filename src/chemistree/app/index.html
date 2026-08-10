@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <title>chemistree</title>
   <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <style>
     body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; }
     h1 { font-size: 18px; margin: 0 0 12px; }
@@ -12,6 +15,7 @@
     #mol3d { flex: 1; height: 420px; border: 1px solid #ddd; position: relative; }
     #cmd { width: 520px; padding: 6px; font-family: monospace; }
     #log { color: #555; min-height: 1.2em; }
+    #terminal { height: 300px; margin-top: 12px; background: #000; padding: 6px; }
   </style>
 </head>
 <body>
@@ -25,21 +29,19 @@
     <button onclick="send()">run</button>
     <span id="log"></span>
   </p>
+  <div id="terminal"></div>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "white" });
     let ligand = null, receptor = null;
     async function loadReceptor() {
       const pdb = await (await fetch("/receptor")).text();
-      if (pdb.trim()) {
-        receptor = viewer.addModel(pdb, "pdb");
-        receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.4 } });
-      }
+      if (pdb.trim()) receptor = viewer.addModel(pdb, "pdb");
     }
     function showPocket() {
       if (!receptor) return;
-      const near = { byres: true, within: { distance: 5, sel: { model: ligand.getID() } } };
-      receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.4 } });
-      receptor.setStyle(near, { line: { colorscheme: "grayCarbon" } });
+      const near = { byres: true, within: { distance: 8, sel: { model: ligand.getID() } } };
+      receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.3 } });
+      receptor.setStyle(near, { stick: { colorscheme: "grayCarbon", radius: 0.12 } });
       viewer.removeAllLabels();
       viewer.addResLabels(
         Object.assign({ model: receptor.getID() }, near),
@@ -59,6 +61,7 @@
     loadReceptor();
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (e) => show(JSON.parse(e.data));
+
     async function send() {
       const input = document.getElementById("cmd");
       const res = await fetch("/command", {
@@ -67,14 +70,31 @@
         body: JSON.stringify({ text: input.value }),
       });
       const data = await res.json();
-      const log = document.getElementById("log");
-      log.textContent = data.error ? "error: " + data.error : data.message;
+      document.getElementById("log").textContent =
+        data.error ? "error: " + data.error : data.message;
       if (data.state) show(data.state);
       input.value = "";
     }
     document.getElementById("cmd").addEventListener("keydown", (e) => {
       if (e.key === "Enter") send();
     });
+
+    // Embedded Claude Code terminal (pty over WebSocket).
+    const term = new Terminal({ fontSize: 13, cursorBlink: true });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("terminal"));
+    fit.fit();
+    const tws = new WebSocket(`ws://${location.host}/terminal`);
+    function sendResize() {
+      fit.fit();
+      if (tws.readyState === 1)
+        tws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    }
+    tws.onopen = sendResize;
+    tws.onmessage = (e) => term.write(e.data);
+    term.onData((d) => tws.send(JSON.stringify({ type: "input", data: d })));
+    window.addEventListener("resize", sendResize);
   </script>
 </body>
 </html>
