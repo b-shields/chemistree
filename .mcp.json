@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "chemistree": {
+      "command": "python",
+      "args": ["-m", "chemistree.app.mcp"]
+    }
+  }
+}

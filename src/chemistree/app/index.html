@@ -8,12 +8,9 @@
     body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; }
     h1 { font-size: 18px; margin: 0 0 12px; }
     .row { display: flex; gap: 16px; align-items: flex-start; }
-    #mol2d, #mol3d {
-      width: 440px; height: 360px;
-      border: 1px solid #ddd; position: relative;
-    }
-    pre { background: #f6f6f6; padding: 10px; border-radius: 6px; white-space: pre-wrap; }
-    #cmd { width: 480px; padding: 6px; font-family: monospace; }
+    #mol2d { width: 420px; height: 420px; border: 1px solid #ddd; }
+    #mol3d { flex: 1; height: 420px; border: 1px solid #ddd; position: relative; }
+    #cmd { width: 520px; padding: 6px; font-family: monospace; }
     #log { color: #555; min-height: 1.2em; }
   </style>
 </head>
@@ -22,7 +19,6 @@
   <div class="row">
     <div id="mol2d"></div>
     <div id="mol3d"></div>
-    <pre id="describe" style="flex:1"></pre>
   </div>
   <p>
     <input id="cmd" placeholder="find chloro | nearest chloro ASP | swap 7 fluoro | undo 7" />
@@ -31,22 +27,33 @@
   </p>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "white" });
-    let ligand = null;
+    let ligand = null, receptor = null;
     async function loadReceptor() {
       const pdb = await (await fetch("/receptor")).text();
       if (pdb.trim()) {
-        const receptor = viewer.addModel(pdb, "pdb");
-        receptor.setStyle({}, { cartoon: { color: "spectrum" } });
+        receptor = viewer.addModel(pdb, "pdb");
+        receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.4 } });
       }
+    }
+    function showPocket() {
+      if (!receptor) return;
+      const near = { byres: true, within: { distance: 5, sel: { model: ligand.getID() } } };
+      receptor.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.4 } });
+      receptor.setStyle(near, { line: { colorscheme: "grayCarbon" } });
+      viewer.removeAllLabels();
+      viewer.addResLabels(
+        Object.assign({ model: receptor.getID() }, near),
+        { fontSize: 11, fontColor: "black", showBackground: false }
+      );
     }
     function show(state) {
       document.getElementById("smiles").textContent = state.smiles;
       document.getElementById("mol2d").innerHTML = state.svg;
-      document.getElementById("describe").textContent = state.describe;
       if (ligand) viewer.removeModel(ligand);
       ligand = viewer.addModel(state.molblock, "mol");
-      ligand.setStyle({}, { stick: {} });
-      viewer.zoomTo({ model: ligand });
+      ligand.setStyle({}, { stick: { colorscheme: "greenCarbon" } });
+      showPocket();
+      viewer.zoomTo({ model: ligand.getID() });
       viewer.render();
     }
     loadReceptor();
