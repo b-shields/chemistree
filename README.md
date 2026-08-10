@@ -32,20 +32,18 @@ pocket, with its fragment breakdown. Drive edits from the command box:
 - `undo 7` — revert node 7's last edit
 
 Group arguments accept a common name (`isopropyl`, `trifluoromethyl`) or a SMILES
-(`[*]C(F)(F)F`). With a receptor loaded, the 3D view shows binding-site side chains
-within 5 Å of the ligand as labeled lines.
+(`[*]C(F)(F)F`). With a receptor loaded, the 3D view shows binding-site residues
+within 8 Å of the ligand as labeled sticks.
 
-## Chat with Claude Code
+## Chat with the molecule
 
-The app doubles as an MCP server, so Claude Code can edit the same molecule and you
-watch the viewers update live. With the app running (above):
+The page also embeds a **Claude Code terminal** (served over a pty; no extra
+install), and the app doubles as an MCP server, so the agent edits the same session
+the viewers show. Run the app from the repo root (so Claude Code finds `.mcp.json`),
+approve the `chemistree` MCP server on first use, then talk to it:
 
-```bash
-conda activate chemistree
-claude            # in the repo root; approve the "chemistree" MCP server when asked
-```
+> *"which chlorine is nearest the ASP?"* · *"swap that one for a fluorine"* ·
+> *"grow a methyl ortho to it"* · *"undo that"*
 
-Then talk to it about the molecule — e.g. *"which chlorine is nearest the ASP?"*,
-*"swap that one for a fluorine"*, *"grow a methyl ortho to it"*. The tools
-(`describe`, `find`, `nearest`, `swap`, `add`, `undo`) run against the same session
-the browser shows, so every edit updates the 2D and 3D views in real time.
+The tools (`describe`, `find`, `nearest`, `swap`, `add`, `undo`) run against the
+live session, so every edit updates the 2D and 3D views in real time.
