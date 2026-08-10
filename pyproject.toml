@@ -19,6 +19,9 @@ ruff = "^0.15"
 mypy = "^2.0"
 pre-commit = "^4.0"
 
+[tool.poetry.group.demo]
+optional = true
+
 [tool.poetry.group.demo.dependencies]
 fastapi = "^0.141.1"
 uvicorn = "^0.52.1"
