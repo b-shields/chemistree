@@ -6,6 +6,9 @@ authors = ["Benjamin J. Shields"]
 readme = "README.md"
 packages = [{include = "chemistree", from = "src"}]
 
+[tool.poetry.scripts]
+chemistree = "chemistree.app.cli:main"
+
 [tool.poetry.dependencies]
 python = "^3.14"
 rdkit = "^2025.9"
@@ -19,10 +22,10 @@ ruff = "^0.15"
 mypy = "^2.0"
 pre-commit = "^4.0"
 
-[tool.poetry.group.demo]
+[tool.poetry.group.app]
 optional = true
 
-[tool.poetry.group.demo.dependencies]
+[tool.poetry.group.app.dependencies]
 fastapi = "^0.141.1"
 uvicorn = "^0.52.1"
 

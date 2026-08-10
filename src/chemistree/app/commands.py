@@ -1,4 +1,4 @@
-"""Parse and apply text commands to a design session (the demo command box)."""
+"""Parse and apply text commands to a design session (the app's command box)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ def run_command(session: DesignSession, text: str) -> str:
         add <id> <group> <position> <reference>
         undo <id>
         find <name>
+        nearest <name> <residue>
 
     Args:
         session: The session to edit.
@@ -44,6 +45,9 @@ def run_command(session: DesignSession, text: str) -> str:
         return f"reverted node {args[0]}"
     if command == "find":
         return f"{args[0]}: {session.find(name=args[0])}"
+    if command == "nearest":
+        name, residue = args[0], args[1]
+        return f"{name} nearest {residue}: node {session.nearest(name, residue)}"
     raise ValueError(f"unknown command: {command!r}")
 
 

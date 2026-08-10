@@ -1,11 +1,11 @@
-"""Demo render and command layer (no web server involved)."""
+"""App render and command layer (no web server involved)."""
 
 import pytest
 from rdkit import Chem
 
 from chemistree import DesignSession
-from chemistree.demo.commands import run_command
-from chemistree.demo.render import render_state
+from chemistree.app.commands import run_command
+from chemistree.app.render import render_state
 
 
 def _canonical(smiles: str) -> str:

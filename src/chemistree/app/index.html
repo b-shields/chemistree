@@ -25,22 +25,31 @@
     <pre id="describe" style="flex:1"></pre>
   </div>
   <p>
-    <input id="cmd" placeholder="swap 1 trifluoromethyl | add 0 isopropyl para methyl | undo 1" />
+    <input id="cmd" placeholder="find chloro | nearest chloro ASP | swap 7 fluoro | undo 7" />
     <button onclick="send()">run</button>
     <span id="log"></span>
   </p>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "white" });
+    let ligand = null;
+    async function loadReceptor() {
+      const pdb = await (await fetch("/receptor")).text();
+      if (pdb.trim()) {
+        const receptor = viewer.addModel(pdb, "pdb");
+        receptor.setStyle({}, { cartoon: { color: "spectrum" } });
+      }
+    }
     function show(state) {
       document.getElementById("smiles").textContent = state.smiles;
       document.getElementById("mol2d").innerHTML = state.svg;
       document.getElementById("describe").textContent = state.describe;
-      viewer.clear();
-      viewer.addModel(state.molblock, "mol");
-      viewer.setStyle({}, { stick: {} });
-      viewer.zoomTo();
+      if (ligand) viewer.removeModel(ligand);
+      ligand = viewer.addModel(state.molblock, "mol");
+      ligand.setStyle({}, { stick: {} });
+      viewer.zoomTo({ model: ligand });
       viewer.render();
     }
+    loadReceptor();
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (e) => show(JSON.parse(e.data));
     async function send() {
