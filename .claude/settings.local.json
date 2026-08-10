@@ -1,10 +1,11 @@
 {
-  "enabledMcpjsonServers": [
-    "chemistree"
-  ],
   "permissions": {
     "allow": [
-      "mcp__chemistree__swap"
+      "mcp__chemistree__swap",
+      "mcp__chemistree__describe"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "chemistree"
+  ]
 }
