@@ -80,6 +80,20 @@ _RAW_NAMES = {
     "*N=N*": "azo",
 }
 _NAMES = {Chem.CanonSmiles(smi): name for smi, name in _RAW_NAMES.items()}
+_GROUP_SMILES = {name: smi for smi, name in _RAW_NAMES.items()}
+
+
+def group_smiles(name: str) -> str | None:
+    """SMILES for a curated group name (the reverse of the naming table).
+
+    Args:
+        name: A common group name, e.g. "isopropyl".
+
+    Returns:
+        The group's SMILES with a bare ``*`` port, or None if the name is unknown.
+    """
+    return _GROUP_SMILES.get(name)
+
 
 # Ring systems named by substructure, independent of substitution or port count.
 # Ordered fused-first; a candidate names a fragment only when it covers exactly the
