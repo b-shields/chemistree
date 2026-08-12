@@ -43,6 +43,11 @@
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
     let ligand = null, receptor = null;
+    // Light-gray carbons with standard element colors, for the pocket residues.
+    const elementBase =
+      $3Dmol.elementColors.Jmol || $3Dmol.elementColors.defaultColors;
+    $3Dmol.elementColors.lightGrayCarbon =
+      Object.assign({}, elementBase, { C: 0xcccccc });
     async function loadReceptor() {
       const pdb = await (await fetch("/receptor")).text();
       if (pdb.trim()) receptor = viewer.addModel(pdb, "pdb");
@@ -57,9 +62,10 @@
       const byChain = {};
       residues.forEach((r) => ((byChain[r.chain] ||= []).push(r.resi)));
       for (const [chain, resi] of Object.entries(byChain)) {
+        // The whole residue: side chain and backbone atoms.
         const sel = { model: rid, resi };
         if (chain.trim()) sel.chain = chain;
-        viewer.addStyle(sel, { line: { colorscheme: "cyanCarbon" } });
+        viewer.addStyle(sel, { line: { colorscheme: "lightGrayCarbon" } });
         viewer.addResLabels(sel, { fontSize: 11, fontColor: "white", showBackground: false });
       }
       viewer.render();
