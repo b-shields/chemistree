@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import rdCoordGen, rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from chemistree.session import DesignSession
@@ -22,8 +22,10 @@ def render_state(session: DesignSession) -> dict:
     mol = session.molecule()
     molblock = Chem.MolToMolBlock(mol)
 
+    # CoordGen gives a cleaner, textbook-style layout; straighten fixes the tilt.
     flat = Chem.RemoveHs(Chem.Mol(mol))
-    AllChem.Compute2DCoords(flat)
+    rdCoordGen.AddCoords(flat)
+    rdDepictor.StraightenDepiction(flat)
     drawer = rdMolDraw2D.MolDraw2DSVG(420, 420)
     rdMolDraw2D.SetDarkMode(drawer)
     drawer.DrawMolecule(flat)

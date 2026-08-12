@@ -64,16 +64,17 @@
       }
       viewer.render();
     }
-    function show(state) {
+    async function show(state) {
       document.getElementById("mol2d").innerHTML = state.svg;
       if (ligand) viewer.removeModel(ligand);
       ligand = viewer.addModel(state.molblock, "mol");
-      ligand.setStyle({}, { stick: { colorscheme: "greenCarbon" } });
+      ligand.setStyle({}, { stick: { colorscheme: "Jmol" } });
+      await receptorReady;  // the protein may still be loading on first render
+      await stylePocket();
       viewer.zoomTo({ model: ligand.getID() });
       viewer.render();
-      stylePocket();
     }
-    loadReceptor();
+    const receptorReady = loadReceptor();
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (e) => show(JSON.parse(e.data));
 
