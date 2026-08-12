@@ -4,40 +4,42 @@
   <meta charset="utf-8" />
   <title>chemistree</title>
   <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <style>
     body {
       font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px;
       background: #0d0d0d; color: #ddd;
     }
-    h1 { font-size: 18px; margin: 0 0 12px; font-weight: 500; }
-    #smiles { color: #7fd08a; font-family: monospace; }
     .row { display: flex; gap: 16px; align-items: flex-start; }
     #mol2d { width: 420px; height: 420px; border: 1px solid #333; }
     #mol3d { flex: 1; height: 420px; border: 1px solid #333; position: relative; }
-    #cmd {
-      width: 520px; padding: 6px; font-family: monospace;
+    #chat { margin-top: 12px; }
+    #feed {
+      height: 110px; overflow-y: auto; padding: 8px 10px;
+      background: #111; border: 1px solid #333; border-bottom: none;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .msg { white-space: pre-wrap; }
+    .msg.user { color: #7fd08a; }
+    .msg.tool { color: #888; font-style: italic; }
+    .msg.err { color: #e06c6c; }
+    #say {
+      width: 100%; box-sizing: border-box; resize: none;
+      padding: 8px 10px; font: inherit; line-height: 1.4;
       background: #1a1a1a; color: #ddd; border: 1px solid #333;
     }
-    button { background: #1a1a1a; color: #ddd; border: 1px solid #333; padding: 6px 10px; }
-    #log { color: #888; min-height: 1.2em; }
-    #terminal { height: 300px; margin-top: 12px; background: #000; padding: 6px; }
+    #say:disabled { opacity: 0.5; }
   </style>
 </head>
 <body>
-  <h1>chemistree &mdash; <span id="smiles"></span></h1>
   <div class="row">
     <div id="mol2d"></div>
     <div id="mol3d"></div>
   </div>
-  <p>
-    <input id="cmd" placeholder="find chloro | nearest chloro ASP | swap 7 fluoro | undo 7" />
-    <button onclick="send()">run</button>
-    <span id="log"></span>
-  </p>
-  <div id="terminal"></div>
+  <div id="chat">
+    <div id="feed"></div>
+    <textarea id="say" rows="1"
+      placeholder="add an isopropyl meta to the pyridine…"></textarea>
+  </div>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
     let ligand = null, receptor = null;
@@ -49,20 +51,20 @@
       if (!receptor) return;
       const residues = await (await fetch("/pocket")).json();
       const rid = receptor.getID();
-      viewer.setStyle({ model: rid }, { cartoon: { color: "spectrum", opacity: 0.25 } });
+      // Ribbon for the whole receptor, side-chain + backbone lines for the pocket.
+      viewer.setStyle({ model: rid }, { cartoon: { color: "spectrum" } });
       viewer.removeAllLabels();
       const byChain = {};
       residues.forEach((r) => ((byChain[r.chain] ||= []).push(r.resi)));
       for (const [chain, resi] of Object.entries(byChain)) {
         const sel = { model: rid, resi };
         if (chain.trim()) sel.chain = chain;
-        viewer.setStyle(sel, { stick: { colorscheme: "cyanCarbon", radius: 0.14 } });
+        viewer.addStyle(sel, { line: { colorscheme: "cyanCarbon" } });
         viewer.addResLabels(sel, { fontSize: 11, fontColor: "white", showBackground: false });
       }
       viewer.render();
     }
     function show(state) {
-      document.getElementById("smiles").textContent = state.smiles;
       document.getElementById("mol2d").innerHTML = state.svg;
       if (ligand) viewer.removeModel(ligand);
       ligand = viewer.addModel(state.molblock, "mol");
@@ -75,42 +77,42 @@
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (e) => show(JSON.parse(e.data));
 
-    async function send() {
-      const input = document.getElementById("cmd");
-      const res = await fetch("/command", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: input.value }),
-      });
-      const data = await res.json();
-      document.getElementById("log").textContent =
-        data.error ? "error: " + data.error : data.message;
-      if (data.state) show(data.state);
-      input.value = "";
+    // Chat with headless Claude Code. The molecule updates arrive over /ws when
+    // Claude calls an MCP tool; this panel only carries the conversation.
+    const feed = document.getElementById("feed");
+    const say = document.getElementById("say");
+    function addMsg(cls, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + cls;
+      div.textContent = text;
+      feed.appendChild(div);
+      feed.scrollTop = feed.scrollHeight;
     }
-    document.getElementById("cmd").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") send();
-    });
-
-    // Embedded Claude Code terminal (pty over WebSocket).
-    const term = new Terminal({
-      fontSize: 13, cursorBlink: true,
-      theme: { background: "#000000", foreground: "#dddddd" },
-    });
-    const fit = new FitAddon.FitAddon();
-    term.loadAddon(fit);
-    term.open(document.getElementById("terminal"));
-    fit.fit();
-    const tws = new WebSocket(`ws://${location.host}/terminal`);
-    function sendResize() {
-      fit.fit();
-      if (tws.readyState === 1)
-        tws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    const cws = new WebSocket(`ws://${location.host}/chat`);
+    cws.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+      if (ev.kind === "text") addMsg("bot", ev.text);
+      else if (ev.kind === "tool") addMsg("tool", "· " + ev.phrase + "…");
+      else if (ev.kind === "error") addMsg("err", ev.message);
+      else if (ev.kind === "done") { say.disabled = false; say.focus(); }
+    };
+    function autoGrow() {
+      say.style.height = "auto";
+      say.style.height = Math.min(say.scrollHeight, 100) + "px";
     }
-    tws.onopen = sendResize;
-    tws.onmessage = (e) => term.write(e.data);
-    term.onData((d) => tws.send(JSON.stringify({ type: "input", data: d })));
-    window.addEventListener("resize", sendResize);
+    say.addEventListener("input", autoGrow);
+    say.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const text = say.value.trim();
+        if (!text || say.disabled) return;
+        addMsg("user", text);
+        cws.send(JSON.stringify({ type: "message", text }));
+        say.value = "";
+        autoGrow();
+        say.disabled = true;
+      }
+    });
   </script>
 </body>
 </html>

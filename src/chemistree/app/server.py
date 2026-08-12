@@ -12,9 +12,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from chemistree.app import state
+from chemistree.app.chat import chat_session
 from chemistree.app.commands import run_command
 from chemistree.app.render import render_state
-from chemistree.app.terminal import terminal_session
 
 app = FastAPI()
 _PAGE = (Path(__file__).parent / "index.html").read_text()
@@ -40,13 +40,13 @@ def receptor() -> str:
 
 @app.get("/pocket")
 def pocket() -> list[dict]:
-    """Binding-site residues (within 8 A of the ligand) to render as sticks."""
+    """Binding-site residues (within 6 A of the ligand) to render as lines."""
     session = state.get_session()
     if session.receptor is None:
         return []
     return [
         {"chain": residue.chain, "resi": residue.number, "resn": residue.name}
-        for residue in session.receptor.pocket(session.molecule())
+        for residue in session.receptor.pocket(session.molecule(), within=6.0)
     ]
 
 
@@ -63,10 +63,10 @@ async def command(payload: dict) -> JSONResponse:
     )
 
 
-@app.websocket("/terminal")
-async def terminal(socket: WebSocket) -> None:
-    """Bridge an embedded terminal (Claude Code) to a pty."""
-    await terminal_session(socket)
+@app.websocket("/chat")
+async def chat(socket: WebSocket) -> None:
+    """Bridge the chat panel to headless Claude Code."""
+    await chat_session(socket)
 
 
 @app.websocket("/ws")

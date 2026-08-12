@@ -12,7 +12,7 @@ poetry install --with app       # include the web-app dependencies
 
 ## App
 
-A local web app with 2D + 3D viewers and a command box, over one design session.
+A local web app with 2D + 3D viewers and a chat box, over one design session.
 Point it at a ligand SDF, optionally with a receptor PDB for proximity context:
 
 ```bash
@@ -23,27 +23,19 @@ python -m chemistree.app tests/data/abl1/reference.sdf \
 
 (Equivalently, the `chemistree` console script after `poetry install --with app`.)
 Open the page to see the ligand in 2D (RDKit) and 3D (3Dmol.js) inside the receptor
-pocket, with its fragment breakdown. Drive edits from the command box:
-
-- `find chloro` — list node ids matching a fragment name
-- `nearest chloro ASP` — the chlorine closest to an ASP residue (needs a receptor)
-- `swap 7 fluoro` — replace the fragment at node 7 with a fluorine
-- `add 2 methyl ortho chloro` — grow a methyl ortho to a chloro
-- `undo 7` — revert node 7's last edit
-
-Group arguments accept a common name (`isopropyl`, `trifluoromethyl`) or a SMILES
-(`[*]C(F)(F)F`). With a receptor loaded, the 3D view shows binding-site residues
-within 8 Å of the ligand as labeled sticks.
+pocket. With a receptor loaded, the 3D view shows binding-site residues within 6 Å
+of the ligand as labeled lines over the ribbon.
 
 ## Chat with the molecule
 
-The page also embeds a **Claude Code terminal** (served over a pty; no extra
-install), and the app doubles as an MCP server, so the agent edits the same session
-the viewers show. Run the app from the repo root (so Claude Code finds `.mcp.json`),
-approve the `chemistree` MCP server on first use, then talk to it:
+The chat box drives **headless Claude Code** (Haiku by default), and the app
+doubles as an MCP server, so the agent edits the same session the viewers show.
+Run the app from the repo root (so Claude Code finds `.mcp.json`), then talk to it:
 
 > *"which chlorine is nearest the ASP?"* · *"swap that one for a fluorine"* ·
 > *"grow a methyl ortho to it"* · *"undo that"*
 
 The tools (`describe`, `find`, `nearest`, `swap`, `add`, `undo`) run against the
-live session, so every edit updates the 2D and 3D views in real time.
+live session, so every edit updates the 2D and 3D views in real time. Group
+arguments accept a common name (`isopropyl`, `trifluoromethyl`) or a SMILES
+(`[*]C(F)(F)F`).
