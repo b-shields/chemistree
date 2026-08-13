@@ -169,6 +169,22 @@ class DesignSession:
         mutate_atom(scaffold, atom, _element_number(element))
         return atom
 
+    def remove(self, node_id: int) -> None:
+        """Delete a node and its subtree, capping the parent with hydrogen.
+
+        "Delete the phenol ring" removes the ring and its own substituents and
+        caps the anilino N to -NH2. The core scaffold (the tree's root) cannot be
+        removed this way.
+
+        Args:
+            node_id: Id of the node to remove, along with everything hanging off
+                it away from the core.
+
+        Raises:
+            ValueError: If the node is the root scaffold.
+        """
+        self.tree.remove_subtree(self.tree.node(node_id))
+
     def undo(self, node_id: int) -> None:
         """Revert a node's most recent edit.
 

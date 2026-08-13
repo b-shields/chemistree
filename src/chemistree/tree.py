@@ -111,6 +111,66 @@ class FragmentTree:
         """Nodes with at most one edge."""
         return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
 
+    def remove_subtree(self, node: FragmentNode) -> None:
+        """Prune a node and its dependent groups, keeping the largest remainder.
+
+        Cutting a node splits the tree into one component per edge. The largest
+        component is kept; the node and every smaller component are removed. So
+        removing a leaf drops just that leaf, and removing a ring drops the ring
+        with its own substituents, while the main scaffold stays. The kept side's
+        port to ``node`` is capped: its dummy becomes an explicit H, preserving
+        the anchor's valence and 3D position.
+
+        Args:
+            node: The node to remove, with the smaller side(s) that depend on it.
+
+        Raises:
+            ValueError: If it is the only node, so nothing would remain.
+        """
+        components = self._components(without=node)
+        if not components:
+            raise ValueError("cannot remove the only fragment")
+        largest = components[0]
+        for component in components:
+            if len(component) > len(largest):
+                largest = component
+        keep = set(largest)
+        for edge, other in self.neighbors(node):
+            if other in keep:
+                _cap_port(other, edge.label)
+                break
+        removed = {node}
+        for component in components:
+            if not keep.issuperset(component):
+                removed.update(component)
+        self.nodes = [n for n in self.nodes if n not in removed]
+        self.edges = [
+            e for e in self.edges if e.node_a not in removed and e.node_b not in removed
+        ]
+        for gone in removed:
+            if gone.id is not None:
+                self._by_id.pop(gone.id, None)
+
+    def _components(self, *, without: FragmentNode) -> list[list[FragmentNode]]:
+        """Connected components of the tree with one node excluded."""
+        seen = {without}
+        components = []
+        for start in self.nodes:
+            if start in seen:
+                continue
+            component = []
+            queue = [start]
+            seen.add(start)
+            while queue:
+                current = queue.pop(0)
+                component.append(current)
+                for _, other in self.neighbors(current):
+                    if other not in seen:
+                        seen.add(other)
+                        queue.append(other)
+            components.append(component)
+        return components
+
     def annotations(self, *, atoms: bool = False) -> TreeAnnotation:
         """A serializable, agent-facing description of the tree.
 
@@ -156,3 +216,25 @@ class FragmentTree:
         mol = rw.GetMol()
         Chem.SanitizeMol(mol)
         return mol
+
+
+def _cap_port(node: FragmentNode, label: int) -> None:
+    """Turn a node's dummy port into hydrogen, pushing the capped fragment.
+
+    Converting the dummy to H (rather than deleting it) keeps the anchor's
+    valence and the dummy's 3D position. The change is pushed as a new snapshot
+    so it can be reverted like any other edit.
+
+    Args:
+        node: The node whose port is capped.
+        label: Isotope label of the dummy port to cap.
+    """
+    mol = Chem.RWMol(node.current.mol)
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() == 0 and atom.GetIsotope() == label:
+            atom.SetAtomicNum(1)
+            atom.SetIsotope(0)
+            break
+    capped = mol.GetMol()
+    Chem.SanitizeMol(capped)
+    node.push(Fragment(capped))

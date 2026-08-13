@@ -142,6 +142,19 @@ def mutate(
 
 
 @mcp.tool
+def remove(node_id: int) -> str:
+    """Delete a leaf fragment, capping its parent with hydrogen.
+
+    Use this to prune a terminal group or ring, e.g. "delete the phenol ring".
+    Only a leaf can be removed; an internal linker raises an error.
+
+    Args:
+        node_id: Leaf node to remove.
+    """
+    return _command(f"remove {node_id}")
+
+
+@mcp.tool
 def undo(node_id: int) -> str:
     """Revert the most recent edit at ``node_id``."""
     return _command(f"undo {node_id}")
