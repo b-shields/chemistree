@@ -48,3 +48,7 @@ server captures the mic, detects when you start and stop speaking, and
 transcribes each utterance into the chat box. The **auto-send** checkbox sends
 each transcript after a short delay you can cancel by typing; unchecked, it just
 fills the box for you to send. The first run downloads a small Whisper model.
+
+For better recognition of chemistry terms, use a larger model:
+`CHEMISTREE_WHISPER_MODEL=distil-large-v3` (or `small.en`, `medium.en`,
+`large-v3`) before launching — bigger is more accurate but slower on CPU.

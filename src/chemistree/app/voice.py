@@ -13,16 +13,23 @@ with ``poetry install --with voice``.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 
 _SAMPLE_RATE = 16000  # what webrtcvad and Whisper expect
 _FRAME_MS = 30  # webrtcvad accepts 10, 20, or 30 ms frames
-_MODEL_NAME = "base.en"
-# Bias transcription toward the vocabulary this app hears.
+# Whisper model. Bigger = more accurate on jargon, slower on CPU. Override to try
+# small.en / medium.en / distil-large-v3 / large-v3 without a code change.
+_MODEL_NAME = os.environ.get("CHEMISTREE_WHISPER_MODEL", "small.en")
+# Bias transcription toward the vocabulary this app hears. This helps jargon as
+# much as a larger model does, and costs nothing.
 _VOCAB_PROMPT = (
-    "Edit a molecule: residues like VAL67, ALA37, PHE; groups like isopropyl, "
-    "methoxy, trifluoromethyl, hydroxy; positions ortho, meta, para."
+    "Chemistry molecule editing. Residues: VAL67, ALA37, PHE, HIS, LEU, TYR. "
+    "Groups: methyl, ethyl, isopropyl, tert-butyl, phenyl, methoxy, hydroxy, "
+    "carbonyl, trifluoromethyl, chloro, fluoro, bromo, nitro, cyano, amine, "
+    "amide, ester, ether, sulfonyl, oxetane, cyclopropyl, pyridine, benzene, "
+    "aniline. Positions: ortho, meta, para, alpha, beta, gamma."
 )
 
 
