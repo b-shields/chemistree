@@ -28,6 +28,11 @@
       background: #1a1a1a; color: #ddd; border: 1px solid #333;
     }
     #say:disabled { opacity: 0.5; }
+    #controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #888; }
+    #mic { background: #1a1a1a; color: #ddd; border: 1px solid #333; padding: 4px 8px; cursor: pointer; }
+    #mic.on { border-color: #7fd08a; color: #7fd08a; }
+    #controls label { cursor: pointer; user-select: none; }
+    #vstatus { font-style: italic; }
   </style>
 </head>
 <body>
@@ -39,6 +44,11 @@
     <div id="feed"></div>
     <textarea id="say" rows="1"
       placeholder="add an isopropyl meta to the pyridine…"></textarea>
+    <div id="controls">
+      <button id="mic" title="hands-free voice: click to listen, click to stop">🎤</button>
+      <label><input type="checkbox" id="autosend" checked /> auto-send</label>
+      <span id="vstatus"></span>
+    </div>
   </div>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
@@ -107,18 +117,66 @@
       say.style.height = "auto";
       say.style.height = Math.min(say.scrollHeight, 100) + "px";
     }
+    function sendMessage(text) {
+      text = text.trim();
+      if (!text || say.disabled) return;
+      addMsg("user", text);
+      cws.send(JSON.stringify({ type: "message", text }));
+      say.value = "";
+      autoGrow();
+      say.disabled = true;
+    }
     say.addEventListener("input", autoGrow);
     say.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        const text = say.value.trim();
-        if (!text || say.disabled) return;
-        addMsg("user", text);
-        cws.send(JSON.stringify({ type: "message", text }));
-        say.value = "";
-        autoGrow();
-        say.disabled = true;
+        cancelPending();
+        sendMessage(say.value);
       }
+    });
+
+    // Hands-free voice. The mic toggle opens/closes the /voice socket (Python
+    // owns the mic and does the transcription); each utterance drops into the
+    // input. With "auto-send" on it sends after a short, cancelable delay.
+    const mic = document.getElementById("mic");
+    const autosend = document.getElementById("autosend");
+    const vstatus = document.getElementById("vstatus");
+    let vws = null, pending = null;
+
+    function cancelPending() {
+      if (pending) { clearTimeout(pending); pending = null; }
+      if (vws) vstatus.textContent = "listening…";
+    }
+    say.addEventListener("input", cancelPending);  // typing cancels an auto-send
+
+    function onTranscript(text) {
+      cancelPending();
+      say.value = (say.value ? say.value + " " : "") + text;
+      autoGrow();
+      if (!autosend.checked) return;
+      let n = 2;
+      const tick = () => {
+        if (n <= 0) { const t = say.value; cancelPending(); sendMessage(t); return; }
+        vstatus.textContent = `sending in ${n}… (type to cancel)`;
+        n -= 1;
+        pending = setTimeout(tick, 700);
+      };
+      tick();
+    }
+
+    mic.addEventListener("click", () => {
+      if (vws) { vws.close(); return; }
+      vws = new WebSocket(`ws://${location.host}/voice`);
+      mic.classList.add("on");
+      vstatus.textContent = "listening…";
+      vws.onmessage = (e) => {
+        const ev = JSON.parse(e.data);
+        if (ev.type === "transcript") onTranscript(ev.text);
+        else if (ev.type === "error") { addMsg("err", "voice: " + ev.message); vws.close(); }
+      };
+      vws.onclose = () => {
+        vws = null; mic.classList.remove("on"); cancelPending(); vstatus.textContent = "";
+      };
     });
   </script>
 </body>

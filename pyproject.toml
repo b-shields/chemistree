@@ -30,6 +30,14 @@ fastapi = "^0.141.1"
 uvicorn = "^0.52.1"
 fastmcp = "^3.4.6"
 
+[tool.poetry.group.voice]
+optional = true
+
+[tool.poetry.group.voice.dependencies]
+faster-whisper = "^1.1"
+sounddevice = "^0.5"
+webrtcvad-wheels = "^2.0.14"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

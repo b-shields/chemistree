@@ -6,12 +6,14 @@ this). Both the command box here and, later, the MCP tools mutate that one sessi
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from chemistree.app import state
+from chemistree.app import state, voice
 from chemistree.app.chat import chat_session
 from chemistree.app.commands import run_command
 from chemistree.app.render import render_state
@@ -67,6 +69,53 @@ async def command(payload: dict) -> JSONResponse:
 async def chat(socket: WebSocket) -> None:
     """Bridge the chat panel to headless Claude Code."""
     await chat_session(socket)
+
+
+@app.websocket("/voice")
+async def voice_input(socket: WebSocket) -> None:
+    """Stream transcribed speech while the socket is open (the mic toggle)."""
+    await socket.accept()
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    stop = threading.Event()
+
+    def on_text(text: str) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, text)
+
+    def run() -> None:
+        try:
+            voice.listen(on_text, stop)
+        except Exception as error:  # missing voice deps, or no microphone
+            loop.call_soon_threadsafe(queue.put_nowait, f"__error__:{error}")
+
+    threading.Thread(target=run, daemon=True).start()
+    sender = asyncio.create_task(_send_transcripts(socket, queue))
+    receiver = asyncio.create_task(_watch_close(socket))
+    try:
+        await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stop.set()
+        sender.cancel()
+        receiver.cancel()
+
+
+async def _send_transcripts(socket: WebSocket, queue: asyncio.Queue[str]) -> None:
+    """Forward queued transcripts (or a one-off error) to the client."""
+    while True:
+        text = await queue.get()
+        if text.startswith("__error__:"):
+            await socket.send_json({"type": "error", "message": text[10:]})
+            return
+        await socket.send_json({"type": "transcript", "text": text})
+
+
+async def _watch_close(socket: WebSocket) -> None:
+    """Resolve when the client closes the socket (mic toggled off)."""
+    try:
+        while True:
+            await socket.receive_text()
+    except WebSocketDisconnect:
+        return
 
 
 @app.websocket("/ws")

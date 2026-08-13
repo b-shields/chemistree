@@ -39,3 +39,12 @@ The tools (`describe`, `find`, `nearest`, `swap`, `add`, `mutate`, `remove`,
 `undo`) run against the live session, so every edit updates the 2D and 3D views
 in real time. Group arguments accept a common name (`isopropyl`,
 `trifluoromethyl`) or a SMILES (`[*]C(F)(F)F`).
+
+## Voice (optional)
+
+Install the extra with `poetry install --with voice` (adds faster-whisper,
+sounddevice, webrtcvad). Click the 🎤 in the page to listen hands-free: the
+server captures the mic, detects when you start and stop speaking, and
+transcribes each utterance into the chat box. The **auto-send** checkbox sends
+each transcript after a short delay you can cancel by typing; unchecked, it just
+fills the box for you to send. The first run downloads a small Whisper model.
