@@ -53,3 +53,21 @@ def test_remove_rejects_the_only_fragment():
     (only_id,) = (n.id for n in session.tree.nodes)
     with pytest.raises(ValueError):
         session.remove(only_id)
+
+
+def test_fill_grows_a_group_where_the_last_remove_freed_a_site():
+    # Remove a phenyl from diphenylamine (-> aniline, freeing the N's site),
+    # then fill that site with a methyl -> N-methylaniline.
+    session = DesignSession("c1ccccc1Nc1ccccc1", three_d=False)
+    session.remove(session.find(name="phenyl")[0])
+    session.fill("methyl")
+    assert session.smiles() == _canonical("CNc1ccccc1")
+
+
+def test_fill_can_be_undone():
+    session = DesignSession("c1ccccc1Nc1ccccc1", three_d=False)
+    session.remove(session.find(name="phenyl")[0])
+    aniline = session.smiles()
+    session.fill("methyl")
+    session.undo()
+    assert session.smiles() == aniline
