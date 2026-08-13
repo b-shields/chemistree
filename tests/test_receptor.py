@@ -125,3 +125,14 @@ def test_nearest_requires_posed_ligand():
     session = DesignSession("Cc1ccc(C)cc1", receptor, three_d=False)
     with pytest.raises(ValueError, match="3D"):
         session.nearest("methyl", "PHE")
+
+
+def test_residues_match_name_and_optional_number():
+    # A chemist says "ALA37"; a bare "ALA" still matches every alanine.
+    receptor = _receptor(
+        [("ALA", 37, (0, 0, 0)), ("ALA", 99, (5, 0, 0)), ("PHE", 40, (9, 0, 0))]
+    )
+    assert len(receptor.residues("ALA")) == 2
+    numbered = receptor.residues("ALA37")
+    assert [(r.name, r.number) for r in numbered] == [("ALA", 37)]
+    assert receptor.residues("ALA100") == []

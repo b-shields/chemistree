@@ -38,6 +38,27 @@ class Residue:
     atoms: tuple[int, ...]
 
 
+def _parse_residue_spec(spec: str) -> tuple[str, int | None]:
+    """Split a residue spec into its name and optional trailing number.
+
+    "ALA37" -> ("ALA", 37); "ALA" -> ("ALA", None). The name is upper-cased so
+    "ala37" resolves too.
+
+    Args:
+        spec: A residue name, optionally with a sequence number appended.
+
+    Returns:
+        The residue name and its number, or None when no number is given.
+    """
+    text = spec.strip()
+    split = len(text)
+    while split > 0 and text[split - 1].isdigit():
+        split -= 1
+    name = text[:split].upper()
+    number = int(text[split:]) if split < len(text) else None
+    return name, number
+
+
 def min_distance(a: np.ndarray, b: np.ndarray) -> float:
     """Smallest distance between two sets of points.
 
@@ -66,17 +87,26 @@ class Receptor:
         self._residues = _group_residues(mol)
 
     def residues(self, name: str | None = None) -> list[Residue]:
-        """The receptor's residues, optionally filtered by name.
+        """The receptor's residues, optionally filtered by name (and number).
+
+        The filter accepts a bare name ("ALA", every alanine) or a name with a
+        sequence number ("ALA37", the one residue) — the form a chemist writes.
 
         Args:
-            name: If given, keep only residues with this name (e.g. "PHE").
+            name: If given, a residue name, optionally with its number appended.
 
         Returns:
             The matching residues.
         """
         if name is None:
             return list(self._residues)
-        return [residue for residue in self._residues if residue.name == name]
+        want_name, want_number = _parse_residue_spec(name)
+        return [
+            residue
+            for residue in self._residues
+            if residue.name == want_name
+            and (want_number is None or residue.number == want_number)
+        ]
 
     def nearest(
         self, candidates: list[FragmentNode], residue: str, *, within: float = _WITHIN
