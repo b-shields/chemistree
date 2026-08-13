@@ -68,3 +68,12 @@ def test_swap_unknown_group_raises_expressive_error():
     (methyl_id,) = session.find(name="methyl")
     with pytest.raises(ValueError, match="unknown group 'flibberto'"):
         session.swap(methyl_id, "flibberto")
+
+
+def test_add_resolves_symmetric_references_to_their_shared_site():
+    # 2,6-dichlorotoluene: "meta to the Cl" is the same open position for both
+    # chlorines (para to the methyl), so it is not ambiguous — pick it.
+    session = DesignSession("Cc1c(Cl)cccc1Cl", three_d=False)
+    (ring,) = session.find(name="benzene")
+    session.add(ring, "tert-butyl", position="meta", reference="chloro")
+    assert session.smiles() == _canonical("Cc1c(Cl)cc(C(C)(C)C)cc1Cl")

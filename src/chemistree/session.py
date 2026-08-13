@@ -20,7 +20,13 @@ from chemistree.errors import NotFound
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor
-from chemistree.selection import resolve_between, resolve_site, select, select_one
+from chemistree.selection import (
+    resolve_between,
+    resolve_shared_site,
+    resolve_site,
+    select,
+    select_one,
+)
 
 
 class DesignSession:
@@ -117,10 +123,10 @@ class DesignSession:
             Ambiguous: If the reference or the site is not unique.
         """
         scaffold = self.tree.node(scaffold_id)
-        substituent = select_one(
-            self.tree, description=reference, name=reference, neighbor_of=scaffold
-        )
-        site = resolve_site(self.tree, scaffold, substituent, position)
+        substituents = select(self.tree, name=reference, neighbor_of=scaffold)
+        if not substituents:
+            raise NotFound(f"no {reference} on the scaffold")
+        site = resolve_shared_site(self.tree, scaffold, substituents, position)
         add_substituent(scaffold, site, _as_group(group))
         self._undo_stack.append(scaffold.undo)
         return site

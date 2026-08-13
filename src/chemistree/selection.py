@@ -323,6 +323,62 @@ def resolve_between(
     return candidates[0]
 
 
+def resolve_shared_site(
+    tree: FragmentTree,
+    scaffold: FragmentNode,
+    references: list[FragmentNode],
+    position: int | str,
+    *,
+    site: SitePredicate = is_open_position,
+) -> int:
+    """Resolve a position relative to any of several equivalent references.
+
+    Gathers the open sites at ``position`` from every reference and returns the
+    single site they agree on. When the references are symmetric — "meta to the
+    Cl" with two chloros that share one open meta position — their sites
+    coincide, so the choice is moot. Distinct sites that are symmetry-equivalent
+    (same canonical rank) also collapse to one. Ambiguity is raised only when
+    genuinely different, non-equivalent sites remain.
+
+    Args:
+        tree: The tree the nodes belong to.
+        scaffold: The node whose atom to resolve.
+        references: The candidate reference substituents (e.g. every chloro).
+        position: A bond count, or a ring/distance synonym.
+        site: Constraint the target atom must satisfy.
+
+    Returns:
+        Index (in the scaffold's fragment) of the resolved atom.
+
+    Raises:
+        NotFound: If no reference yields an open site.
+        Ambiguous: If the references point to distinct, non-equivalent sites.
+    """
+    mol = scaffold.current.mol
+    candidates: set[int] = set()
+    for reference in references:
+        anchor = attachment_atom(tree, scaffold, reference)
+        distance = resolve_offset(position, ring_size=_ring_size_at(mol, anchor))
+        candidates.update(
+            atom for atom in atoms_at_distance(mol, anchor, distance) if site(mol, atom)
+        )
+    if not candidates:
+        raise NotFound(f"no open position {position} from the reference")
+    classes = _symmetry_classes(mol)
+    by_class = {classes[atom]: atom for atom in sorted(candidates)}
+    if len(by_class) > 1:
+        raise Ambiguous(
+            f"{len(by_class)} distinct positions {position} from the reference",
+            sorted(by_class.values()),
+        )
+    return min(candidates)
+
+
+def _symmetry_classes(mol: Chem.Mol) -> list[int]:
+    """Canonical atom ranks; symmetry-equivalent atoms share a rank."""
+    return list(Chem.CanonicalRankAtoms(mol, breakTies=False))
+
+
 def _ring_size_at(mol: Chem.Mol, atom: int) -> int | None:
     """Size of the smallest ring containing an atom, or None if it is acyclic."""
     sizes = [len(ring) for ring in mol.GetRingInfo().AtomRings() if atom in ring]
