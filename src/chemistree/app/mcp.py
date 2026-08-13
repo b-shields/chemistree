@@ -110,6 +110,38 @@ def add(node_id: int, group: str, position: str, reference: str) -> str:
 
 
 @mcp.tool
+def mutate(
+    node_id: int,
+    element: str,
+    between_first: str = "",
+    between_second: str = "",
+    position: str = "",
+    reference: str = "",
+) -> str:
+    """Change one ring atom's element (e.g. aromatic C to N for a pyridine).
+
+    Address the atom either by the two substituents it sits between, or by a
+    position relative to one substituent. Use this for ring heteroatom edits,
+    e.g. an aniline to a 2-aminopyridine: mutate the ring carbon between the
+    amino and the methyl to nitrogen.
+
+    Args:
+        node_id: Ring node to edit.
+        element: New element as a symbol ("N") or name ("nitrogen").
+        between_first: One substituent the target atom sits between.
+        between_second: The other substituent it sits between.
+        position: A bond count or ring synonym from ``reference`` (alternative
+            to ``between``).
+        reference: Name of the substituent to count from (with ``position``).
+    """
+    if between_first and between_second:
+        return _command(
+            f"mutate {node_id} {element} between {between_first} {between_second}"
+        )
+    return _command(f"mutate {node_id} {element} {position} {reference}")
+
+
+@mcp.tool
 def undo(node_id: int) -> str:
     """Revert the most recent edit at ``node_id``."""
     return _command(f"undo {node_id}")

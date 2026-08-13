@@ -12,6 +12,8 @@ def run_command(session: DesignSession, text: str) -> str:
 
         swap <id> <group>
         add <id> <group> <position> <reference>
+        mutate <id> <element> between <ref_a> <ref_b>
+        mutate <id> <element> <position> <reference>
         undo <id>
         find <name>
         nearest <name> <residue>
@@ -40,6 +42,18 @@ def run_command(session: DesignSession, text: str) -> str:
             int(node_id), group, position=_position(position), reference=reference
         )
         return f"grew {group} on node {node_id}"
+    if command == "mutate":
+        node_id, element = args[0], args[1]
+        if len(args) >= 5 and args[2] == "between":
+            session.mutate(int(node_id), element, between=(args[3], args[4]))
+        else:
+            session.mutate(
+                int(node_id),
+                element,
+                position=_position(args[2]),
+                reference=args[3],
+            )
+        return f"mutated node {node_id} to {element}"
     if command == "undo":
         session.undo(int(args[0]))
         return f"reverted node {args[0]}"

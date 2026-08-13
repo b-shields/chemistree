@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdFMCS, rdMolAlign
+from rdkit.Chem import AllChem, rdchem, rdFMCS, rdMolAlign
 
 from chemistree.fragment import Fragment
 from chemistree.geometry import chiral_volume
@@ -42,6 +42,54 @@ def swap(node: FragmentNode, group: str | Chem.Mol) -> None:
     if old.mol.GetNumConformers():
         new = _place(old, new)
     node.push(Fragment(new))
+
+
+def mutate_atom(node: FragmentNode, atom: int, element: int) -> None:
+    """Change one atom's element in a node's fragment (e.g. aromatic C to N).
+
+    The atom is addressed by its index in the fragment's heavy-atom skeleton.
+    Ports are untouched. When the fragment carries 3D coordinates the mutated
+    fragment is re-placed by MCS overlay, so the rest of the ring keeps its frame.
+    This is the atom-level path to ring heteroatom edits: turning the ring CH
+    between two substituents into N converts a benzene into the matching pyridine.
+
+    Args:
+        node: Node whose current fragment is edited.
+        atom: Heavy-atom index of the atom to change.
+        element: Atomic number of the new element.
+
+    Raises:
+        ValueError: If the change leaves an invalid valence.
+    """
+    old = node.current
+    new = _mutated_mol(old.mol, atom, element)
+    if old.mol.GetNumConformers():
+        new = _place(old, new)
+    node.push(Fragment(new))
+
+
+def _mutated_mol(mol: Chem.Mol, atom: int, element: int) -> Chem.Mol:
+    """Return a copy of ``mol`` with ``atom``'s element set to ``element``.
+
+    Works on the heavy-atom skeleton (implicit Hs) so the H count is recomputed
+    for the new element, and re-sanitizes to re-perceive aromaticity.
+
+    Raises:
+        ValueError: If sanitization fails (an impossible valence).
+    """
+    heavy = Chem.RWMol(Chem.RemoveHs(mol))
+    target = heavy.GetAtomWithIdx(atom)
+    target.SetAtomicNum(element)
+    target.SetFormalCharge(0)
+    target.SetNumExplicitHs(0)
+    target.SetNoImplicit(False)
+    try:
+        Chem.SanitizeMol(heavy)
+    except rdchem.MolSanitizeException as error:
+        raise ValueError(
+            f"cannot mutate atom {atom} to element {element}: {error}"
+        ) from error
+    return heavy.GetMol()
 
 
 def add_substituent(node: FragmentNode, atom: int, group: str | Chem.Mol) -> None:

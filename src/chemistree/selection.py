@@ -279,6 +279,50 @@ def resolve_site(
     return resolve_position(scaffold.current.mol, anchor, position, site=site)
 
 
+def resolve_between(
+    tree: FragmentTree,
+    scaffold: FragmentNode,
+    first: FragmentNode,
+    second: FragmentNode,
+    *,
+    site: SitePredicate = is_open_position,
+) -> int:
+    """Resolve the scaffold atom that sits between two of its substituents.
+
+    "Between X and Y" is the single scaffold atom bonded to both the ``first``
+    and ``second`` attachment points. This addresses a ring atom flanked by two
+    named groups, which single-reference offsets cannot (both ortho positions
+    would match).
+
+    Args:
+        tree: The tree the nodes belong to.
+        scaffold: The node whose atom to resolve.
+        first: One substituent of the scaffold.
+        second: Another substituent of the scaffold.
+        site: Constraint the target atom must satisfy.
+
+    Returns:
+        Index (in the scaffold's current fragment) of the single atom adjacent
+        to both references.
+
+    Raises:
+        NotFound: If no atom lies between the two references.
+        Ambiguous: If more than one does.
+    """
+    mol = scaffold.current.mol
+    anchor_a = attachment_atom(tree, scaffold, first)
+    anchor_b = attachment_atom(tree, scaffold, second)
+    shared = set(atoms_at_distance(mol, anchor_a, 1)) & set(
+        atoms_at_distance(mol, anchor_b, 1)
+    )
+    candidates = [atom for atom in sorted(shared) if site(mol, atom)]
+    if not candidates:
+        raise NotFound("no atom between the two references")
+    if len(candidates) > 1:
+        raise Ambiguous("more than one atom between the two references", candidates)
+    return candidates[0]
+
+
 def _ring_size_at(mol: Chem.Mol, atom: int) -> int | None:
     """Size of the smallest ring containing an atom, or None if it is acyclic."""
     sizes = [len(ring) for ring in mol.GetRingInfo().AtomRings() if atom in ring]

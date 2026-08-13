@@ -12,13 +12,13 @@ from rdkit import Chem
 
 from chemistree.annotations import annotate
 from chemistree.chem import prepare_molecule
-from chemistree.edits import add_substituent
+from chemistree.edits import add_substituent, mutate_atom
 from chemistree.edits import swap as _swap_fragment
 from chemistree.errors import NotFound
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor
-from chemistree.selection import resolve_site, select, select_one
+from chemistree.selection import resolve_between, resolve_site, select, select_one
 
 
 class DesignSession:
@@ -119,6 +119,56 @@ class DesignSession:
         add_substituent(scaffold, site, _as_group(group))
         return site
 
+    def mutate(
+        self,
+        scaffold_id: int,
+        element: str,
+        *,
+        between: tuple[str, str] | None = None,
+        reference: str | None = None,
+        position: int | str | None = None,
+    ) -> int:
+        """Change one ring atom's element, addressing it by its neighbors.
+
+        The target atom is either the one between two named substituents
+        (``between``), or one at a ``position`` offset from a single
+        ``reference``. This is the atom-level path to ring heteroatom edits, e.g.
+        turning the ring CH between an amino and a methyl into N to make a
+        2-aminopyridine.
+
+        Args:
+            scaffold_id: Id of the ring node to edit.
+            element: New element, as a symbol ("N") or name ("nitrogen").
+            between: Names of two substituents the target atom sits between.
+            reference: Name of one substituent to count from (with ``position``).
+            position: A bond count, or a ring synonym, from ``reference``.
+
+        Returns:
+            Index of the mutated atom in the scaffold's fragment.
+
+        Raises:
+            ValueError: If the addressing is incomplete or the element is unknown.
+            NotFound: If no such atom exists. Ambiguous: If it is not unique.
+        """
+        scaffold = self.tree.node(scaffold_id)
+        if between is not None:
+            first = select_one(
+                self.tree, description=between[0], name=between[0], neighbor_of=scaffold
+            )
+            second = select_one(
+                self.tree, description=between[1], name=between[1], neighbor_of=scaffold
+            )
+            atom = resolve_between(self.tree, scaffold, first, second)
+        elif reference is not None and position is not None:
+            substituent = select_one(
+                self.tree, description=reference, name=reference, neighbor_of=scaffold
+            )
+            atom = resolve_site(self.tree, scaffold, substituent, position)
+        else:
+            raise ValueError("mutate needs between=(a, b) or reference and position")
+        mutate_atom(scaffold, atom, _element_number(element))
+        return atom
+
     def undo(self, node_id: int) -> None:
         """Revert a node's most recent edit.
 
@@ -154,6 +204,34 @@ class DesignSession:
         node = self.receptor.nearest(candidates, residue)
         assert node.id is not None
         return node.id
+
+
+_ELEMENT_NAMES = {
+    "carbon": 6,
+    "nitrogen": 7,
+    "oxygen": 8,
+    "fluorine": 9,
+    "phosphorus": 15,
+    "sulfur": 16,
+}
+
+
+def _element_number(element: str) -> int:
+    """Atomic number for an element symbol ("N") or common name ("nitrogen").
+
+    Raises:
+        ValueError: If the element is not recognized.
+    """
+    key = element.strip().lower()
+    if key in _ELEMENT_NAMES:
+        return _ELEMENT_NAMES[key]
+    try:
+        number = Chem.GetPeriodicTable().GetAtomicNumber(element.strip().capitalize())
+    except RuntimeError as error:
+        raise ValueError(f"unknown element: {element!r}") from error
+    if number <= 0:
+        raise ValueError(f"unknown element: {element!r}")
+    return int(number)
 
 
 def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:
