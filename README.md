@@ -35,7 +35,7 @@ Run the app from the repo root (so Claude Code finds `.mcp.json`), then talk to 
 > *"which chlorine is nearest the ASP?"* · *"swap that one for a fluorine"* ·
 > *"grow a methyl ortho to it"* · *"undo that"*
 
-The tools (`describe`, `find`, `nearest`, `swap`, `add`, `undo`) run against the
-live session, so every edit updates the 2D and 3D views in real time. Group
-arguments accept a common name (`isopropyl`, `trifluoromethyl`) or a SMILES
-(`[*]C(F)(F)F`).
+The tools (`describe`, `find`, `nearest`, `swap`, `add`, `mutate`, `remove`,
+`undo`) run against the live session, so every edit updates the 2D and 3D views
+in real time. Group arguments accept a common name (`isopropyl`,
+`trifluoromethyl`) or a SMILES (`[*]C(F)(F)F`).
