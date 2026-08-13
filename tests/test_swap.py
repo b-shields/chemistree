@@ -126,3 +126,14 @@ def test_swap_rejects_port_count_mismatch():
     tree = fragment(_embed("Cc1ccc(C)cc1"))  # ring has two ports
     with pytest.raises(ValueError, match="port"):
         swap(_ring_node(tree), "[*]C(F)(F)F")
+
+
+def test_swap_reconciles_bare_ports_on_a_two_port_linker():
+    # Diphenylamine's -NH- linker (2 ports) -> ether, given a bare-dummy group.
+    # The ports auto-map onto the fragment's labels; no [1*]/[2*] needed.
+    from chemistree import DesignSession
+
+    session = DesignSession("c1ccccc1Nc1ccccc1", three_d=False)
+    (amine_id,) = session.find(name="amine")
+    session.swap(amine_id, "[*]O[*]")
+    assert session.smiles() == str(Chem.CanonSmiles("c1ccccc1Oc1ccccc1"))

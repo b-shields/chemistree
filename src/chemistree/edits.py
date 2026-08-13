@@ -115,17 +115,35 @@ def _dummies(mol: Chem.Mol) -> list[Chem.Atom]:
 
 
 def _assign_port_labels(old: Fragment, new: Chem.Mol) -> None:
-    """Match the new group's dummies to the old fragment's port labels."""
+    """Match the new group's dummies to the old fragment's port labels.
+
+    Explicit labels that already match are honored. Bare dummies (isotope 0) are
+    reconciled: the fragment's labels are assigned to them in atom order, so a
+    caller can write ``[*]O[*]`` to replace a 2-port ``-NH-`` linker without
+    knowing the internal port numbers.
+
+    Args:
+        old: Fragment being replaced, whose port labels must be preserved.
+        new: Replacement group; its dummies are labeled in place.
+
+    Raises:
+        ValueError: If the port counts differ, or the dummies carry explicit
+            labels that do not match the fragment's.
+    """
     old_labels = sorted(p.label for p in old.ports)
     dummies = _dummies(new)
     if len(dummies) != len(old_labels):
         raise ValueError(
             f"group has {len(dummies)} port(s); fragment has {len(old_labels)}"
         )
-    if len(old_labels) == 1:
-        dummies[0].SetIsotope(old_labels[0])  # unambiguous
-    elif sorted(a.GetIsotope() for a in dummies) != old_labels:
-        raise ValueError("group port labels must match the fragment's port labels")
+    isotopes = [a.GetIsotope() for a in dummies]
+    if sorted(isotopes) == old_labels:
+        return  # explicit labels already match
+    if all(isotope == 0 for isotope in isotopes):
+        for dummy, label in zip(dummies, old_labels):
+            dummy.SetIsotope(label)
+        return
+    raise ValueError("group port labels must match the fragment's port labels")
 
 
 def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
