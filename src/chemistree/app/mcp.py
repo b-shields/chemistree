@@ -171,9 +171,9 @@ def remove(node_id: int) -> str:
 
 
 @mcp.tool
-def undo(node_id: int) -> str:
-    """Revert the most recent edit at ``node_id``."""
-    return _command(f"undo {node_id}")
+def undo() -> str:
+    """Revert the most recent edit (swap, add, mutate, or remove)."""
+    return _command("undo")
 
 
 if __name__ == "__main__":

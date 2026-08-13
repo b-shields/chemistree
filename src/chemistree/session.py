@@ -8,6 +8,8 @@ and runs the edit. Group arguments accept a curated name ("isopropyl") or a SMIL
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rdkit import Chem
 
 from chemistree.annotations import annotate
@@ -40,6 +42,7 @@ class DesignSession:
         """
         self.tree = fragment(prepare_molecule(molecule, three_d=three_d))
         self.receptor = Receptor(receptor) if receptor is not None else None
+        self._undo_stack: list[Callable[[], None]] = []
 
     def describe(self) -> str:
         """A readable markdown summary of the current fragments."""
@@ -86,7 +89,9 @@ class DesignSession:
             node_id: Id of the node to edit.
             group: A curated group name or a SMILES/Mol with matching ports.
         """
-        _swap_fragment(self.tree.node(node_id), _as_group(group))
+        node = self.tree.node(node_id)
+        _swap_fragment(node, _as_group(group))
+        self._undo_stack.append(node.undo)
 
     def add(
         self,
@@ -117,6 +122,7 @@ class DesignSession:
         )
         site = resolve_site(self.tree, scaffold, substituent, position)
         add_substituent(scaffold, site, _as_group(group))
+        self._undo_stack.append(scaffold.undo)
         return site
 
     def mutate(
@@ -167,6 +173,7 @@ class DesignSession:
         else:
             raise ValueError("mutate needs between=(a, b) or reference and position")
         mutate_atom(scaffold, atom, _element_number(element))
+        self._undo_stack.append(scaffold.undo)
         return atom
 
     def remove(self, node_id: int) -> None:
@@ -183,15 +190,18 @@ class DesignSession:
         Raises:
             ValueError: If the node is the root scaffold.
         """
-        self.tree.remove_subtree(self.tree.node(node_id))
+        removed = self.tree.remove_subtree(self.tree.node(node_id))
+        self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
 
-    def undo(self, node_id: int) -> None:
-        """Revert a node's most recent edit.
+    def undo(self) -> None:
+        """Revert the most recent edit (swap, add, mutate, or remove).
 
-        Args:
-            node_id: Id of the node to revert.
+        Raises:
+            ValueError: If there is nothing to undo.
         """
-        self.tree.node(node_id).undo()
+        if not self._undo_stack:
+            raise ValueError("nothing to undo")
+        self._undo_stack.pop()()
 
     def nearest(self, name: str, residue: str) -> int:
         """Id of the named fragment closest to a named receptor residue.

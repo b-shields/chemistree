@@ -61,6 +61,21 @@ class Edge:
 
 
 @dataclass
+class RemovedSubtree:
+    """What a ``remove_subtree`` took out, enough to put it back.
+
+    Attributes:
+        nodes: The removed nodes (the target and its dependent groups).
+        edges: The edges that were incident to any removed node.
+        parent: The kept node whose port was capped, to be uncapped on restore.
+    """
+
+    nodes: list[FragmentNode]
+    edges: list[Edge]
+    parent: FragmentNode
+
+
+@dataclass
 class FragmentTree:
     """An unrooted free tree of fragments connected by port-paired edges."""
 
@@ -111,7 +126,7 @@ class FragmentTree:
         """Nodes with at most one edge."""
         return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
 
-    def remove_subtree(self, node: FragmentNode) -> None:
+    def remove_subtree(self, node: FragmentNode) -> RemovedSubtree:
         """Prune a node and its dependent groups, keeping the largest remainder.
 
         Cutting a node splits the tree into one component per edge. The largest
@@ -124,6 +139,9 @@ class FragmentTree:
         Args:
             node: The node to remove, with the smaller side(s) that depend on it.
 
+        Returns:
+            A record of what was removed, so ``restore_subtree`` can undo it.
+
         Raises:
             ValueError: If it is the only node, so nothing would remain.
         """
@@ -135,21 +153,39 @@ class FragmentTree:
             if len(component) > len(largest):
                 largest = component
         keep = set(largest)
+        parent = None
         for edge, other in self.neighbors(node):
             if other in keep:
+                parent = other
                 _cap_port(other, edge.label)
                 break
+        assert parent is not None  # a non-only node always touches the kept side
         removed = {node}
         for component in components:
             if not keep.issuperset(component):
                 removed.update(component)
-        self.nodes = [n for n in self.nodes if n not in removed]
-        self.edges = [
-            e for e in self.edges if e.node_a not in removed and e.node_b not in removed
+        removed_edges = [
+            e for e in self.edges if e.node_a in removed or e.node_b in removed
         ]
+        self.nodes = [n for n in self.nodes if n not in removed]
+        self.edges = [e for e in self.edges if e not in removed_edges]
         for gone in removed:
             if gone.id is not None:
                 self._by_id.pop(gone.id, None)
+        return RemovedSubtree(nodes=list(removed), edges=removed_edges, parent=parent)
+
+    def restore_subtree(self, removed: RemovedSubtree) -> None:
+        """Undo a ``remove_subtree``: re-add its nodes and edges, uncap the parent.
+
+        Args:
+            removed: The record returned by ``remove_subtree``.
+        """
+        removed.parent.undo()  # revert the cap, restoring the dummy port
+        for node in removed.nodes:
+            self.nodes.append(node)
+            if node.id is not None:
+                self._by_id[node.id] = node
+        self.edges.extend(removed.edges)
 
     def _components(self, *, without: FragmentNode) -> list[list[FragmentNode]]:
         """Connected components of the tree with one node excluded."""

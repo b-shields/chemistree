@@ -33,6 +33,21 @@ def test_remove_takes_a_rings_substituents_with_it():
     assert session.smiles() == _canonical("Nc1ccccc1")
 
 
+def test_remove_can_be_undone():
+    # Deleting a ring and reverting it must restore the molecule exactly.
+    session = DesignSession("c1ccccc1Nc1ccc(O)cc1", three_d=False)
+    original = session.smiles()
+    phenol = next(
+        nid
+        for nid in session.find(name="benzene")
+        if len(session.tree.neighbors(session.tree.node(nid))) == 2
+    )
+    session.remove(phenol)
+    assert session.smiles() != original
+    session.undo()
+    assert session.smiles() == original
+
+
 def test_remove_rejects_the_only_fragment():
     session = DesignSession("c1ccccc1", three_d=False)  # a single-node tree
     (only_id,) = (n.id for n in session.tree.nodes)

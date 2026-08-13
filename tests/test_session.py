@@ -36,11 +36,23 @@ def test_add_grows_relative_to_a_named_reference():
     assert session.smiles() == _canonical("CC(C)c1ccc(C)cc1")
 
 
-def test_undo_reverts_an_edit():
+def test_undo_reverts_the_last_edit():
     session = DesignSession("Cc1ccccc1", three_d=False)
     (methyl_id,) = session.find(name="methyl")
     session.swap(methyl_id, "[*]Cl")
-    session.undo(methyl_id)
+    session.undo()
+    assert session.smiles() == _canonical("Cc1ccccc1")
+
+
+def test_undo_walks_back_edits_in_order():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    (methyl_id,) = session.find(name="methyl")
+    session.swap(methyl_id, "trifluoromethyl")
+    (ring_id,) = session.find(name="phenyl")
+    session.add(ring_id, "chloro", position="para", reference="trifluoromethyl")
+    session.undo()  # reverts the add
+    assert session.smiles() == _canonical("FC(F)(F)c1ccccc1")
+    session.undo()  # reverts the swap
     assert session.smiles() == _canonical("Cc1ccccc1")
 
 

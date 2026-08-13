@@ -15,7 +15,7 @@ def run_command(session: DesignSession, text: str) -> str:
         mutate <id> <element> between <ref_a> <ref_b>
         mutate <id> <element> <position> <reference>
         remove <id>
-        undo <id>
+        undo
         find <name>
         nearest <name> <residue>
 
@@ -59,8 +59,8 @@ def run_command(session: DesignSession, text: str) -> str:
         session.remove(int(args[0]))
         return f"removed node {args[0]}"
     if command == "undo":
-        session.undo(int(args[0]))
-        return f"reverted node {args[0]}"
+        session.undo()
+        return "reverted the last edit"
     if command == "find":
         return f"{args[0]}: {session.find(name=args[0])}"
     if command == "nearest":
