@@ -131,3 +131,10 @@ def test_resolve_position_on_a_chain():
     anchor = butyl.current.ports[0].anchor_idx
     second = resolve_position(butyl.current.mol, anchor, 1)
     assert butyl.current.mol.GetAtomWithIdx(second).GetTotalNumHs() == 2  # a CH2
+
+
+def test_alpha_beta_gamma_are_distance_synonyms():
+    # Chemist shorthand: alpha/beta/gamma = 1/2/3 bonds, no ring requirement.
+    assert resolve_offset("alpha") == 1
+    assert resolve_offset("beta") == 2
+    assert resolve_offset("gamma") == 3

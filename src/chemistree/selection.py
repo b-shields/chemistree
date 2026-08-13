@@ -15,7 +15,16 @@ from chemistree.errors import Ambiguous, NotFound
 from chemistree.naming import classify_fragment, name_fragment
 from chemistree.tree import FragmentNode, FragmentTree
 
-POSITION_SYNONYMS = {"ortho": 1, "meta": 2, "para": 3}
+# ortho/meta/para are ring-only (para needs a 6-ring); alpha/beta/gamma are the
+# general distance shorthand (1/2/3 bonds), valid on rings and chains alike.
+POSITION_SYNONYMS = {
+    "ortho": 1,
+    "meta": 2,
+    "para": 3,
+    "alpha": 1,
+    "beta": 2,
+    "gamma": 3,
+}
 
 SitePredicate = Callable[[Chem.Mol, int], bool]
 
@@ -121,12 +130,13 @@ def attachment_atom(
 def resolve_offset(spec: int | str, ring_size: int | None = None) -> int:
     """Translate a position spec to a topological distance.
 
-    An integer passes through unchanged. A synonym (ortho/meta/para) maps to a
-    distance; ``para`` requires a 6-membered ring, since distance 3 is the unique
-    opposite position only there.
+    An integer passes through unchanged. A synonym maps to a distance:
+    ortho/meta/para or alpha/beta/gamma = 1/2/3. ``para`` requires a 6-membered
+    ring, since distance 3 is the unique opposite position only there;
+    alpha/beta/gamma carry no ring requirement.
 
     Args:
-        spec: A bond count, or one of ``ortho`` / ``meta`` / ``para``.
+        spec: A bond count, or one of ortho/meta/para or alpha/beta/gamma.
         ring_size: Size of the ring the reference sits in, needed to validate
             ``para``.
 

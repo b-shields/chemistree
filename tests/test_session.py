@@ -1,5 +1,6 @@
 """DesignSession: the stateful facade over fragment / selection / edits."""
 
+import pytest
 from rdkit import Chem
 
 from chemistree import DesignSession
@@ -48,3 +49,10 @@ def test_describe_and_annotations_reflect_state():
     assert "methyl" in session.describe()
     names = {node["name"] for node in session.annotations()["nodes"]}
     assert names == {"methyl", "phenyl"}
+
+
+def test_swap_unknown_group_raises_expressive_error():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    (methyl_id,) = session.find(name="methyl")
+    with pytest.raises(ValueError, match="unknown group 'flibberto'"):
+        session.swap(methyl_id, "flibberto")

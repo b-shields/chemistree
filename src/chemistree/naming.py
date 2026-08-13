@@ -82,6 +82,19 @@ _RAW_NAMES = {
 _NAMES = {Chem.CanonSmiles(smi): name for smi, name in _RAW_NAMES.items()}
 _GROUP_SMILES = {name: smi for smi, name in _RAW_NAMES.items()}
 
+# A bounded set of common alt/adjective forms aliased to canonical names. Kept
+# small on purpose: expressive lookup errors cover the long tail, so the model
+# can recover from an unknown name rather than us chasing every synonym.
+_SYNONYMS = {
+    "hydroxy": "hydroxyl",
+    "carboxy": "carboxyl",
+    "mercapto": "thiol",
+    "nitrile": "cyano",
+}
+_GROUP_SMILES.update(
+    {alias: _GROUP_SMILES[canonical] for alias, canonical in _SYNONYMS.items()}
+)
+
 
 def group_smiles(name: str) -> str | None:
     """SMILES for a curated group name (the reverse of the naming table).

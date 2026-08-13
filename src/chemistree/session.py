@@ -157,7 +157,20 @@ class DesignSession:
 
 
 def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:
-    """Resolve a curated group name to SMILES; pass SMILES/Mol through unchanged."""
-    if isinstance(group, str):
-        return group_smiles(group) or group
+    """Resolve a curated group name to SMILES; pass SMILES/Mol through unchanged.
+
+    Raises:
+        ValueError: If a string is neither a known group name nor valid SMILES.
+            The message names the token so the agent can retry a synonym or a
+            SMILES instead of seeing a confusing downstream parse error.
+    """
+    if not isinstance(group, str):
+        return group
+    smiles = group_smiles(group)
+    if smiles is not None:
+        return smiles
+    if Chem.MolFromSmiles(group) is None:
+        raise ValueError(
+            f"unknown group {group!r}: not a known group name and not valid SMILES"
+        )
     return group

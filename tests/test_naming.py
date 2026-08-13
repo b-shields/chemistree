@@ -5,6 +5,7 @@ from rdkit import Chem
 
 from chemistree import classify_fragment, name_fragment
 from chemistree.fragment import Fragment
+from chemistree.naming import group_smiles
 
 
 def _fragment(smiles: str) -> Fragment:
@@ -65,3 +66,13 @@ def test_unknown_fragment_has_no_name():
 )
 def test_classification(smiles, classification):
     assert classify_fragment(_fragment(smiles)) == classification
+
+
+def test_group_smiles_resolves_bounded_synonyms():
+    # A few common alt/adjective forms alias the canonical curated names.
+    assert group_smiles("hydroxy") == group_smiles("hydroxyl") == "*O"
+    assert group_smiles("nitrile") == group_smiles("cyano") == "*C#N"
+
+
+def test_group_smiles_unknown_name_is_none():
+    assert group_smiles("flibberto") is None
