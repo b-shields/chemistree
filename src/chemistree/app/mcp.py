@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 from fastmcp import FastMCP
@@ -24,6 +25,25 @@ def _state() -> dict:
         return dict(json.load(response))
 
 
+def read_error(http_error: urllib.error.HTTPError) -> str:
+    """Return the app's error text from a failed request body.
+
+    Args:
+        http_error: The error ``urlopen`` raises on a 4xx/5xx response.
+
+    Returns:
+        The ``error`` field from the JSON body when present, else the raw body,
+        else the status line. This is what lets the agent see *why* an edit
+        failed instead of a bare "HTTP Error 400".
+    """
+    body = http_error.read().decode(errors="ignore")
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return body.strip() or str(http_error)
+    return str(payload.get("error", body))
+
+
 def _command(text: str) -> str:
     """Run a command against the app and report the result and new SMILES."""
     request = urllib.request.Request(
@@ -31,8 +51,11 @@ def _command(text: str) -> str:
         data=json.dumps({"text": text}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request) as response:
-        data = json.load(response)
+    try:
+        with urllib.request.urlopen(request) as response:
+            data = json.load(response)
+    except urllib.error.HTTPError as http_error:
+        return f"error: {read_error(http_error)}"
     if "error" in data:
         return f"error: {data['error']}"
     return f"{data['message']} | SMILES: {data['state']['smiles']}"
