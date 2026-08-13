@@ -46,9 +46,13 @@ _BLOCKED_TOOLS = ",".join(
 # Keep the agent on the molecule and its replies short for the compact feed.
 _SYSTEM_PROMPT = (
     "You edit one molecule in a live design session. Use only the chemistree "
-    "tools (describe, smiles, find, nearest, swap, add, undo) to inspect and "
-    "change it. Never read, write, or run files or shell commands. Reply in one "
-    "short sentence."
+    "tools (describe, smiles, find, nearest, swap, add, mutate, remove, undo) to "
+    "inspect and change it. A group can be a common name (isopropyl) or a SMILES "
+    "with one dummy [*] per attachment point ([*]C1([*])COC1 for a 2-port oxetane "
+    "linker); if a name is not recognized, pass a SMILES. When a request names a "
+    "residue (near/closest to it), you MUST call nearest to pick the node before "
+    "editing; do not guess. Never read, write, or run files or shell commands. "
+    "Reply in one short sentence."
 )
 
 # Tool name -> present-tense phrase shown while the tool runs.

@@ -83,6 +83,10 @@ def find(name: str) -> str:
 def nearest(name: str, residue: str) -> str:
     """Node id of the fragment named ``name`` closest to a receptor residue.
 
+    Always use this to pick the node when a request mentions a residue (e.g. "the
+    chloro near ALA37"): it measures distance, so it resolves *which* matching
+    fragment the request means. Do not guess the node in that case.
+
     Args:
         name: Fragment common name (e.g. 'chloro').
         residue: Residue name in the receptor (e.g. 'PHE').
@@ -92,7 +96,17 @@ def nearest(name: str, residue: str) -> str:
 
 @mcp.tool
 def swap(node_id: int, group: str) -> str:
-    """Replace the fragment at ``node_id`` with a group (a common name or SMILES)."""
+    """Replace the fragment at ``node_id`` with a group.
+
+    The group is a common name ('trifluoromethyl') or a SMILES with one dummy
+    ``[*]`` per attachment point ('[*]C1([*])COC1' for a 2-port oxetane linker);
+    if a name is not recognized, pass a SMILES. When the request names a residue,
+    get ``node_id`` from ``nearest`` first — do not guess which fragment is meant.
+
+    Args:
+        node_id: Node whose fragment is replaced.
+        group: A common group name or a SMILES with a ``[*]`` per port.
+    """
     return _command(f"swap {node_id} {group}")
 
 
@@ -100,10 +114,12 @@ def swap(node_id: int, group: str) -> str:
 def add(node_id: int, group: str, position: str, reference: str) -> str:
     """Grow a group on a scaffold, relative to one of its substituents.
 
+    When the request names a residue, get ``node_id`` from ``nearest`` first.
+
     Args:
         node_id: Scaffold node to grow from.
-        group: Group to add (a common name or SMILES).
-        position: A bond count, or a ring synonym (ortho/meta/para).
+        group: A common group name, or a SMILES with one dummy ``[*]`` port.
+        position: A bond count, or a synonym (ortho/meta/para, alpha/beta/gamma).
         reference: Name of the scaffold substituent to count from.
     """
     return _command(f"add {node_id} {group} {position} {reference}")
