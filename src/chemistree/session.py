@@ -51,6 +51,11 @@ class DesignSession:
         self.receptor = Receptor(receptor) if receptor is not None else None
         self._undo_stack: list[Callable[[], None]] = []
         self._last_removed: RemovedSubtree | None = None
+        self.smiles_history: list[str] = [self.smiles()]
+
+    def _record(self) -> None:
+        """Append the current SMILES to the history, in edit order."""
+        self.smiles_history.append(self.smiles())
 
     def describe(self) -> str:
         """A readable markdown summary of the current fragments."""
@@ -100,6 +105,7 @@ class DesignSession:
         node = self.tree.node(node_id)
         _swap_fragment(node, _as_group(group))
         self._undo_stack.append(node.undo)
+        self._record()
 
     def add(
         self,
@@ -131,6 +137,7 @@ class DesignSession:
         site = resolve_shared_site(self.tree, scaffold, substituents, position)
         add_substituent(scaffold, site, _as_group(group))
         self._undo_stack.append(scaffold.undo)
+        self._record()
         return site
 
     def mutate(
@@ -182,6 +189,7 @@ class DesignSession:
             raise ValueError("mutate needs between=(a, b) or reference and position")
         mutate_atom(scaffold, atom, _element_number(element))
         self._undo_stack.append(scaffold.undo)
+        self._record()
         return atom
 
     def remove(self, node_id: int) -> None:
@@ -201,6 +209,7 @@ class DesignSession:
         removed = self.tree.remove_subtree(self.tree.node(node_id))
         self._last_removed = removed
         self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
+        self._record()
 
     def fill(self, group: str | Chem.Mol) -> int:
         """Grow a group at the site the last ``remove`` freed.
@@ -225,6 +234,7 @@ class DesignSession:
         add_substituent(parent, site, _as_group(group))
         self._last_removed = None
         self._undo_stack.append(parent.undo)
+        self._record()
         return site
 
     def undo(self) -> None:
@@ -236,6 +246,7 @@ class DesignSession:
         if not self._undo_stack:
             raise ValueError("nothing to undo")
         self._undo_stack.pop()()
+        self._record()
 
     def nearest(self, name: str, residue: str) -> int:
         """Id of the named fragment closest to a named receptor residue.

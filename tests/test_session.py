@@ -77,3 +77,23 @@ def test_add_resolves_symmetric_references_to_their_shared_site():
     (ring,) = session.find(name="benzene")
     session.add(ring, "tert-butyl", position="meta", reference="chloro")
     assert session.smiles() == _canonical("Cc1c(Cl)cc(C(C)(C)C)cc1Cl")
+
+
+def test_smiles_history_seeds_with_the_input():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    assert session.smiles_history == [_canonical("Cc1ccccc1")]
+
+
+def test_smiles_history_records_each_edit_in_order():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    (methyl_id,) = session.find(name="methyl")
+    session.swap(methyl_id, "trifluoromethyl")
+    (ring_id,) = session.find(name="phenyl")
+    session.add(ring_id, "chloro", position="para", reference="trifluoromethyl")
+    session.undo()
+    assert session.smiles_history == [
+        _canonical("Cc1ccccc1"),
+        _canonical("FC(F)(F)c1ccccc1"),
+        _canonical("FC(F)(F)c1ccc(Cl)cc1"),
+        _canonical("FC(F)(F)c1ccccc1"),
+    ]
