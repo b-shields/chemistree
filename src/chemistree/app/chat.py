@@ -1,9 +1,13 @@
 """Drive Claude Code headless and stream a clean chat feed to the browser.
 
-Each user turn runs ``claude -p`` with stream-json output. The raw stream is
-mapped to small UI events (assistant text, a domain-language line per tool call,
-end-of-turn) and pushed over a WebSocket. Session continuity is kept with
-``--resume`` using the session id Claude reports on the first turn.
+One persistent ``claude`` process serves the whole conversation. It runs in
+stream-json input mode: each user turn is written to its stdin as one JSON line,
+and its stdout is read until the turn's ``result`` message. Holding the process
+open keeps the model warm — only the first turn pays cold-start; later turns
+skip the process launch, the MCP handshake, and the session replay.
+
+The raw stream is mapped to small UI events (assistant text, a domain-language
+line per tool call, end-of-turn) and pushed over a WebSocket.
 
 The molecule viewers do not update from here. When Claude calls an MCP tool it
 mutates the shared session, and the app broadcasts that over ``/ws``. This module
@@ -72,25 +76,26 @@ _TOOL_PHRASES = {
 }
 
 
-def build_command(message: str, session_id: str | None) -> list[str]:
-    """Build the ``claude`` argv for one user turn.
+def build_command() -> list[str]:
+    """Build the ``claude`` argv for the persistent streaming session.
 
-    Args:
-        message: The user's natural-language request.
-        session_id: The id of the running conversation, or None on the first turn.
+    The process is spawned once and reused for every turn. It reads user
+    messages from stdin as stream-json and writes stream-json to stdout, so no
+    per-turn message or ``--resume`` id is needed here.
 
     Returns:
-        The argument list to spawn, resuming the session when one is known.
+        The argument list to spawn.
     """
-    cmd = [
+    return [
         _CLAUDE_BIN,
         "-p",
-        message,
-        "--model",
-        _MODEL,
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--verbose",
+        "--model",
+        _MODEL,
         "--append-system-prompt",
         _SYSTEM_PROMPT,
         "--mcp-config",
@@ -101,9 +106,22 @@ def build_command(message: str, session_id: str | None) -> list[str]:
         "--disallowedTools",
         _BLOCKED_TOOLS,
     ]
-    if session_id:
-        cmd += ["--resume", session_id]
-    return cmd
+
+
+def user_message_line(text: str) -> bytes:
+    """Encode a user turn as one stream-json input line.
+
+    Args:
+        text: The user's natural-language request.
+
+    Returns:
+        The newline-terminated JSON line to write to the process's stdin.
+    """
+    message = {
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }
+    return (json.dumps(message) + "\n").encode()
 
 
 def tool_phrase(name: str) -> str:
@@ -130,8 +148,6 @@ def to_events(message: dict) -> list[dict]:
         turn on its own.
     """
     kind = message.get("type")
-    if kind == "system" and message.get("subtype") == "init":
-        return [{"kind": "session", "session_id": message.get("session_id", "")}]
     if kind == "assistant":
         return _assistant_events(message.get("message", {}))
     if kind == "result" and message.get("subtype") != "success":
@@ -172,44 +188,57 @@ def _short_tool_name(name: str) -> str:
 
 
 async def chat_session(socket: WebSocket) -> None:
-    """Bridge a browser chat panel to headless Claude Code over a WebSocket.
+    """Bridge a browser chat panel to one persistent Claude Code process.
+
+    Spawns the process once, then feeds each inbound ``{"type": "message"}`` to
+    its stdin and streams the reply back until the turn ends. The process is
+    reused across turns and torn down when the socket closes.
 
     Args:
-        socket: The accepted WebSocket. Each inbound ``{"type": "message"}`` runs
-            one turn; events stream back until the turn ends.
+        socket: The accepted WebSocket.
     """
     await socket.accept()
-    session_id: str | None = None
+    proc = await asyncio.create_subprocess_exec(
+        *build_command(),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert proc.stderr is not None
+    drain = asyncio.create_task(_drain(proc.stderr))
     try:
         while True:
             event = json.loads(await socket.receive_text())
             if event.get("type") == "message":
-                session_id = await _run_turn(socket, event.get("text", ""), session_id)
+                alive = await _run_turn(socket, proc, event.get("text", ""))
+                if not alive:
+                    break
     except (WebSocketDisconnect, ValueError):
         pass
+    finally:
+        drain.cancel()
+        await _shutdown(proc)
 
 
 async def _run_turn(
-    socket: WebSocket, message: str, session_id: str | None
-) -> str | None:
-    """Run one turn: spawn Claude, stream its events, and end with ``done``.
+    socket: WebSocket, proc: asyncio.subprocess.Process, message: str
+) -> bool:
+    """Run one turn on the persistent process: send, stream events, end with ``done``.
 
     Args:
         socket: The chat WebSocket to push events to.
+        proc: The running Claude process.
         message: The user's request for this turn.
-        session_id: The current session id, or None before the first reply.
 
     Returns:
-        The session id to use next turn (updated from Claude's init event).
+        True if the process is still usable for the next turn; False if it died,
+        so the caller stops the loop.
     """
-    proc = await asyncio.create_subprocess_exec(
-        *build_command(message, session_id),
-        stdin=asyncio.subprocess.DEVNULL,  # -p reads no stdin; avoid a startup stall
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    assert proc.stdout is not None and proc.stderr is not None
+    assert proc.stdin is not None and proc.stdout is not None
+    proc.stdin.write(user_message_line(message))
+    await proc.stdin.drain()
 
+    saw_result = False
     async for raw in proc.stdout:
         line = raw.decode(errors="ignore").strip()
         if not line:
@@ -219,12 +248,31 @@ async def _run_turn(
         except ValueError:
             continue
         for ui in to_events(payload):
-            if ui["kind"] == "session":
-                session_id = ui["session_id"]
             await socket.send_json(ui)
+        if payload.get("type") == "result":
+            saw_result = True
+            break
 
-    stderr = (await proc.stderr.read()).decode(errors="ignore").strip()
-    if await proc.wait() != 0 and stderr:
-        await socket.send_json({"kind": "error", "message": stderr[:500]})
+    if not saw_result:  # stdout closed mid-turn: the process is gone
+        await socket.send_json({"kind": "error", "message": "the assistant stopped"})
     await socket.send_json({"kind": "done"})
-    return session_id
+    return saw_result
+
+
+async def _drain(stream: asyncio.StreamReader) -> None:
+    """Consume a process stream so its pipe never fills and blocks the process."""
+    async for _ in stream:
+        pass
+
+
+async def _shutdown(proc: asyncio.subprocess.Process) -> None:
+    """Close stdin and wait for the process to exit, terminating if it lingers."""
+    if proc.returncode is not None:
+        return
+    if proc.stdin is not None:
+        proc.stdin.close()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.terminate()
+        await proc.wait()

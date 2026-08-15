@@ -5,25 +5,28 @@ a raw stream-json message becomes a UI event. Driving the real ``claude`` binary
 is integration and is not unit tested.
 """
 
-from chemistree.app.chat import build_command, to_events, tool_phrase
+import json
+
+from chemistree.app.chat import (
+    build_command,
+    to_events,
+    tool_phrase,
+    user_message_line,
+)
 
 
-def test_build_command_first_turn_has_no_resume():
-    cmd = build_command("swap the chloro for fluoro", session_id=None)
+def test_build_command_runs_a_persistent_stream_session():
+    cmd = build_command()
     assert "-p" in cmd
-    assert "swap the chloro for fluoro" in cmd
-    assert cmd[cmd.index("--model") + 1] == "haiku"
+    assert cmd[cmd.index("--input-format") + 1] == "stream-json"
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert cmd[cmd.index("--model") + 1] == "haiku"
+    # One process serves every turn, so no per-turn message or resume id.
     assert "--resume" not in cmd
 
 
-def test_build_command_resumes_a_known_session():
-    cmd = build_command("now undo that", session_id="abc-123")
-    assert cmd[cmd.index("--resume") + 1] == "abc-123"
-
-
 def test_build_command_allows_only_mcp_tools():
-    cmd = build_command("swap it", session_id=None)
+    cmd = build_command()
     assert cmd[cmd.index("--allowedTools") + 1] == "mcp__chemistree"
     blocked = cmd[cmd.index("--disallowedTools") + 1]
     # The file and shell tools must be off limits during a demo.
@@ -33,14 +36,23 @@ def test_build_command_allows_only_mcp_tools():
 
 def test_build_command_scopes_mcp_to_this_project_only():
     # Strict scoping keeps the user's global MCP servers out of every turn.
-    cmd = build_command("swap it", session_id=None)
+    cmd = build_command()
     assert cmd[cmd.index("--mcp-config") + 1] == ".mcp.json"
     assert "--strict-mcp-config" in cmd
 
 
-def test_init_message_yields_the_session_id():
-    events = to_events({"type": "system", "subtype": "init", "session_id": "s-9"})
-    assert events == [{"kind": "session", "session_id": "s-9"}]
+def test_user_message_line_encodes_a_turn():
+    line = user_message_line("swap the chloro for fluoro")
+    assert line.endswith(b"\n")
+    payload = json.loads(line)
+    assert payload["type"] == "user"
+    assert payload["message"]["content"][0]["text"] == "swap the chloro for fluoro"
+
+
+def test_init_message_yields_nothing():
+    # Each turn emits an init line, but with a persistent process there is no
+    # session to track, so it produces no UI event.
+    assert to_events({"type": "system", "subtype": "init", "session_id": "s-9"}) == []
 
 
 def test_assistant_text_becomes_a_text_event():
