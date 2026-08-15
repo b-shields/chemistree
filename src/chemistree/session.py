@@ -27,6 +27,7 @@ from chemistree.selection import (
     select,
     select_one,
 )
+from chemistree.tree import RemovedSubtree
 
 
 class DesignSession:
@@ -49,6 +50,7 @@ class DesignSession:
         self.tree = fragment(prepare_molecule(molecule, three_d=three_d))
         self.receptor = Receptor(receptor) if receptor is not None else None
         self._undo_stack: list[Callable[[], None]] = []
+        self._last_removed: RemovedSubtree | None = None
 
     def describe(self) -> str:
         """A readable markdown summary of the current fragments."""
@@ -197,7 +199,33 @@ class DesignSession:
             ValueError: If the node is the root scaffold.
         """
         removed = self.tree.remove_subtree(self.tree.node(node_id))
+        self._last_removed = removed
         self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
+
+    def fill(self, group: str | Chem.Mol) -> int:
+        """Grow a group at the site the last ``remove`` freed.
+
+        After removing a subtree, the parent's port is capped with hydrogen.
+        This grows a new group back at that same atom, so "delete the phenyl,
+        then put a methyl in its place" is two steps against one anchor.
+
+        Args:
+            group: A curated group name or a SMILES/Mol with one port.
+
+        Returns:
+            Index of the scaffold atom the group was grown at.
+
+        Raises:
+            ValueError: If no removal has freed a site to fill.
+        """
+        if self._last_removed is None:
+            raise ValueError("nothing was removed, so there is no site to fill")
+        parent = self._last_removed.parent
+        site = self._last_removed.parent_site
+        add_substituent(parent, site, _as_group(group))
+        self._last_removed = None
+        self._undo_stack.append(parent.undo)
+        return site
 
     def undo(self) -> None:
         """Revert the most recent edit (swap, add, mutate, or remove).

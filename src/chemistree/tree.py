@@ -68,11 +68,14 @@ class RemovedSubtree:
         nodes: The removed nodes (the target and its dependent groups).
         edges: The edges that were incident to any removed node.
         parent: The kept node whose port was capped, to be uncapped on restore.
+        parent_site: Index (in ``parent``'s fragment) of the atom whose port was
+            capped, so a later edit can grow a group back at the freed site.
     """
 
     nodes: list[FragmentNode]
     edges: list[Edge]
     parent: FragmentNode
+    parent_site: int
 
 
 @dataclass
@@ -154,9 +157,15 @@ class FragmentTree:
                 largest = component
         keep = set(largest)
         parent = None
+        parent_site = -1
         for edge, other in self.neighbors(node):
             if other in keep:
                 parent = other
+                # Record the anchor before capping, so a later ``fill`` knows
+                # which atom the freed port sat on.
+                parent_site = next(
+                    p.anchor_idx for p in other.current.ports if p.label == edge.label
+                )
                 _cap_port(other, edge.label)
                 break
         assert parent is not None  # a non-only node always touches the kept side
@@ -172,7 +181,12 @@ class FragmentTree:
         for gone in removed:
             if gone.id is not None:
                 self._by_id.pop(gone.id, None)
-        return RemovedSubtree(nodes=list(removed), edges=removed_edges, parent=parent)
+        return RemovedSubtree(
+            nodes=list(removed),
+            edges=removed_edges,
+            parent=parent,
+            parent_site=parent_site,
+        )
 
     def restore_subtree(self, removed: RemovedSubtree) -> None:
         """Undo a ``remove_subtree``: re-add its nodes and edges, uncap the parent.
@@ -226,10 +240,11 @@ class FragmentTree:
         Combines every node's current fragment, then for each edge bonds the two
         anchor atoms and deletes the dummy atoms that marked the port.
         """
-        combined = None
-        for node in self.nodes:
-            mol = node.current.mol
-            combined = mol if combined is None else Chem.CombineMols(combined, mol)
+        if not self.nodes:
+            raise ValueError("cannot reconstruct an empty tree")
+        combined = self.nodes[0].current.mol
+        for node in self.nodes[1:]:
+            combined = Chem.CombineMols(combined, node.current.mol)
 
         rw = Chem.RWMol(combined)
         bond_types = {edge.label: edge.bond_type for edge in self.edges}
