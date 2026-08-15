@@ -274,10 +274,18 @@ def _free_inverted_centers(
 
 
 def _mcs_correspondence(a: Chem.Mol, b: Chem.Mol) -> list[tuple[int, int]]:
-    """Atom-index pairs (a, b) shared by the two molecules' MCS."""
+    """Atom-index pairs (a, b) shared by the two molecules' MCS.
+
+    Atoms match across element (``CompareAnyHeavyAtom``) so a ring survives a
+    heteroatom change: swapping a benzene for a pyridine still overlays the whole
+    ring onto the old frame. With strict element matching the ring would not
+    match, leaving it pinned by only its two port anchors, which warps the placed
+    geometry. Bonds must still match order, and rings only match complete rings,
+    so the overlay stays structurally faithful.
+    """
     mcs = rdFMCS.FindMCS(
         [a, b],
-        atomCompare=rdFMCS.AtomCompare.CompareElements,
+        atomCompare=rdFMCS.AtomCompare.CompareAnyHeavyAtom,
         bondCompare=rdFMCS.BondCompare.CompareOrderExact,
         ringMatchesRingOnly=True,
         completeRingsOnly=True,

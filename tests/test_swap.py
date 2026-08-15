@@ -84,6 +84,29 @@ def test_swap_ring_benzene_to_pyridine():
     assert rdMolDescriptors.CalcMolFormula(product) == "C7H9N"
 
 
+def _worst_heavy_bond(mol: Chem.Mol) -> float:
+    """Longest heavy-heavy bond length; a warped placement shows as an outlier."""
+    conf = mol.GetConformer()
+    lengths = [
+        conf.GetAtomPosition(b.GetBeginAtomIdx()).Distance(
+            conf.GetAtomPosition(b.GetEndAtomIdx())
+        )
+        for b in mol.GetBonds()
+        if b.GetBeginAtom().GetAtomicNum() > 1 and b.GetEndAtom().GetAtomicNum() > 1
+    ]
+    return float(max(lengths))
+
+
+def test_swap_hetero_ring_does_not_warp_the_geometry():
+    # Swapping a benzene for a 2-aminopyridine must overlay the whole ring, not
+    # pin it by two anchors. With element-strict MCS the ring did not match and a
+    # ring bond stretched to ~2.4 A; every heavy-heavy bond must stay near normal.
+    tree = fragment(_embed("Cc1ccc(C)cc1"))  # p-xylene, para ports
+    ring = _ring_node(tree)
+    swap(ring, "c1([*])c(N)nc([*])cc1")  # 2-aminopyridine, ports para
+    assert _worst_heavy_bond(ring.current.mol) < 1.7
+
+
 def test_swap_ring_benzene_to_oxazole_contraction():
     tree = fragment(_embed("Cc1ccccc1"))  # toluene, single-port ring
     swap(_ring_node(tree), "[*]c1ocnc1")
