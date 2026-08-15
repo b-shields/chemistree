@@ -206,11 +206,51 @@ def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     old_conf = old.mol.GetConformer()
     rdMolAlign.AlignMol(new, old.mol, atomMap=[(ni, oi) for ni, oi in fixed.items()])
     conf = new.GetConformer()
-    for ni, oi in fixed.items():
+    corr_new_to_old = {ni: oi for oi, ni in correspondence}
+    pinned = {
+        ni: oi
+        for ni, oi in fixed.items()
+        if _should_pin(new, ni, oi, old.mol, corr_new_to_old)
+    }
+    for ni, oi in pinned.items():
         conf.SetAtomPosition(ni, old_conf.GetAtomPosition(oi))
 
-    _relax(new, fixed)
+    _relax(new, pinned)
     return new
+
+
+def _should_pin(
+    new: Chem.Mol,
+    ni: int,
+    oi: int,
+    old: Chem.Mol,
+    corr_new_to_old: dict[int, int],
+) -> bool:
+    """Whether to fix a matched atom to its old position.
+
+    Heavy atoms and port dummies are always pinned; they define the frame. A
+    hydrogen is pinned only when its parent heavy atom is itself a matched pair.
+    A genuinely corresponding hydrogen (on a preserved stereocenter) is then held
+    so the center keeps its handedness, while a hydrogen matched by coincidence
+    (a new ring H mapped to an old methyl H) is left free to relax, so the new
+    ring is not dragged onto a wrong position.
+
+    Args:
+        new: The new group being placed.
+        ni: Index in ``new`` of the matched atom.
+        oi: Index in ``old`` the atom is matched to.
+        old: The old fragment molecule.
+        corr_new_to_old: Map of matched new-atom index to old-atom index.
+
+    Returns:
+        True if the atom should be pinned to its old position.
+    """
+    atom = new.GetAtomWithIdx(ni)
+    if atom.GetAtomicNum() != 1:
+        return True
+    new_parent = atom.GetNeighbors()[0].GetIdx()
+    old_parent = old.GetAtomWithIdx(oi).GetNeighbors()[0].GetIdx()
+    return bool(corr_new_to_old.get(new_parent) == old_parent)
 
 
 def _fixed_atoms(
@@ -294,7 +334,25 @@ def _mcs_correspondence(a: Chem.Mol, b: Chem.Mol) -> list[tuple[int, int]]:
     if not mcs.smartsString:
         return []
     patt = Chem.MolFromSmarts(mcs.smartsString)
-    return list(zip(a.GetSubstructMatch(patt), b.GetSubstructMatch(patt)))
+    pairs = zip(a.GetSubstructMatch(patt), b.GetSubstructMatch(patt))
+    # Drop cross-kind pairs. A single-atom MCS pattern can be a wildcard that
+    # matches a heavy atom in one molecule and a hydrogen in the other; such a
+    # pair is meaningless and skews the overlay. Keep only pairs whose atoms are
+    # the same kind (heavy, hydrogen, or dummy). Hydrogen pairs still guide the
+    # alignment, but ``_place`` never pins a hydrogen to an exact position.
+    return [
+        (oi, ni)
+        for oi, ni in pairs
+        if _atom_kind(a.GetAtomWithIdx(oi)) == _atom_kind(b.GetAtomWithIdx(ni))
+    ]
+
+
+def _atom_kind(atom: Chem.Atom) -> str:
+    """Classify an atom as ``heavy``, ``hydrogen``, or ``dummy`` for matching."""
+    number = atom.GetAtomicNum()
+    if number == 0:
+        return "dummy"
+    return "hydrogen" if number == 1 else "heavy"
 
 
 def _relax(mol: Chem.Mol, fixed: Iterable[int]) -> None:

@@ -107,6 +107,24 @@ def test_swap_hetero_ring_does_not_warp_the_geometry():
     assert _worst_heavy_bond(ring.current.mol) < 1.7
 
 
+def test_swap_leaf_to_ring_keeps_normal_ch_bonds():
+    # Growing a phenyl where a methyl was: the ring's hydrogens must not be pinned
+    # onto the old methyl's H positions, which collapsed a ring C-H to ~0.97 A.
+    tree = fragment(_embed("Cc1ccccc1"))
+    methyl = _leaf(tree, 1)
+    swap(methyl, "[*]c1ccccc1")
+    mol = methyl.current.mol  # the node now holds the grown phenyl
+    conf = mol.GetConformer()
+    ch = [
+        conf.GetAtomPosition(b.GetBeginAtomIdx()).Distance(
+            conf.GetAtomPosition(b.GetEndAtomIdx())
+        )
+        for b in mol.GetBonds()
+        if {b.GetBeginAtom().GetAtomicNum(), b.GetEndAtom().GetAtomicNum()} == {6, 1}
+    ]
+    assert min(ch) > 1.0  # aromatic C-H is ~1.08; a pinned-H warp shows as ~0.97
+
+
 def test_swap_ring_benzene_to_oxazole_contraction():
     tree = fragment(_embed("Cc1ccccc1"))  # toluene, single-port ring
     swap(_ring_node(tree), "[*]c1ocnc1")
