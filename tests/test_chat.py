@@ -31,6 +31,13 @@ def test_build_command_allows_only_mcp_tools():
         assert tool in blocked.split(",")
 
 
+def test_build_command_scopes_mcp_to_this_project_only():
+    # Strict scoping keeps the user's global MCP servers out of every turn.
+    cmd = build_command("swap it", session_id=None)
+    assert cmd[cmd.index("--mcp-config") + 1] == ".mcp.json"
+    assert "--strict-mcp-config" in cmd
+
+
 def test_init_message_yields_the_session_id():
     events = to_events({"type": "system", "subtype": "init", "session_id": "s-9"})
     assert events == [{"kind": "session", "session_id": "s-9"}]

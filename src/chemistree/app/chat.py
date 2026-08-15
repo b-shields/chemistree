@@ -23,6 +23,11 @@ _CLAUDE_BIN = os.environ.get("CHEMISTREE_CLAUDE_BIN", "claude")
 _MODEL = "haiku"
 # Allow this project's MCP tools without a per-call prompt in headless mode.
 _ALLOWED_TOOLS = "mcp__chemistree"
+# Load only this project's MCP server. Without strict scoping Claude also loads
+# the user's global servers (Gmail/Drive/Calendar) every turn, which the demo
+# never uses; they add startup cost and auth prompts. The app runs from the repo
+# root, so the relative path resolves.
+_MCP_CONFIG = ".mcp.json"
 # Block every built-in tool: the agent may edit the molecule via MCP, nothing
 # else. It cannot touch the repo, the shell, or the network.
 _BLOCKED_TOOLS = ",".join(
@@ -88,6 +93,9 @@ def build_command(message: str, session_id: str | None) -> list[str]:
         "--verbose",
         "--append-system-prompt",
         _SYSTEM_PROMPT,
+        "--mcp-config",
+        _MCP_CONFIG,
+        "--strict-mcp-config",
         "--allowedTools",
         _ALLOWED_TOOLS,
         "--disallowedTools",
