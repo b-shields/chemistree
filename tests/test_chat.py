@@ -8,6 +8,8 @@ is integration and is not unit tested.
 import json
 
 from chemistree.app.chat import (
+    EXPLORE,
+    PRIMED,
     build_command,
     to_events,
     tool_phrase,
@@ -16,7 +18,7 @@ from chemistree.app.chat import (
 
 
 def test_build_command_runs_a_persistent_stream_session():
-    cmd = build_command()
+    cmd = build_command(EXPLORE)
     assert "-p" in cmd
     assert cmd[cmd.index("--input-format") + 1] == "stream-json"
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
@@ -26,7 +28,7 @@ def test_build_command_runs_a_persistent_stream_session():
 
 
 def test_build_command_allows_only_mcp_tools():
-    cmd = build_command()
+    cmd = build_command(EXPLORE)
     assert cmd[cmd.index("--allowedTools") + 1] == "mcp__chemistree"
     blocked = cmd[cmd.index("--disallowedTools") + 1]
     # The file and shell tools must be off limits during a demo.
@@ -36,9 +38,26 @@ def test_build_command_allows_only_mcp_tools():
 
 def test_build_command_scopes_mcp_to_this_project_only():
     # Strict scoping keeps the user's global MCP servers out of every turn.
-    cmd = build_command()
+    cmd = build_command(EXPLORE)
     assert cmd[cmd.index("--mcp-config") + 1] == ".mcp.json"
     assert "--strict-mcp-config" in cmd
+
+
+def test_primed_mode_seeds_the_fragment_listing():
+    # In primed mode the current listing is embedded in the system prompt so the
+    # agent can act on node ids without a find/describe call.
+    listing = "- [0] chloro attached to [1] benzene"
+    cmd = build_command(PRIMED, context=listing)
+    prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    assert listing in prompt
+    assert "directly" in prompt  # the primed instruction to use ids directly
+
+
+def test_explore_mode_never_seeds_even_with_context():
+    listing = "- [0] chloro attached to [1] benzene"
+    cmd = build_command(EXPLORE, context=listing)
+    prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    assert listing not in prompt
 
 
 def test_user_message_line_encodes_a_turn():

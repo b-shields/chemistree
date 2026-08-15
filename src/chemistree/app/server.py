@@ -67,8 +67,11 @@ async def command(payload: dict) -> JSONResponse:
 
 @app.websocket("/chat")
 async def chat(socket: WebSocket) -> None:
-    """Bridge the chat panel to headless Claude Code."""
-    await chat_session(socket)
+    """Bridge the chat panel to headless Claude Code in the configured mode."""
+    mode = state.get_mode()
+    # Seed the current fragments (at connect, so a reload after edits is current).
+    context = state.get_session().describe() if mode.prime_context else ""
+    await chat_session(socket, mode, context)
 
 
 @app.websocket("/voice")

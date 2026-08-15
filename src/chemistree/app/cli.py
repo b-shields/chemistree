@@ -13,6 +13,7 @@ import uvicorn
 from rdkit import Chem
 
 from chemistree.app import state
+from chemistree.app.chat import DEFAULT_MODE, MODES
 
 
 def main() -> None:
@@ -22,6 +23,13 @@ def main() -> None:
     parser.add_argument("--receptor", help="Receptor PDB file for proximity context.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--chat-mode",
+        choices=sorted(MODES),
+        default=DEFAULT_MODE.name,
+        help="'primed' seeds the agent with fragments (snappier); 'explore' lets "
+        "it look them up (its reasoning is visible).",
+    )
     args = parser.parse_args()
 
     ligand = Chem.MolFromMolFile(args.molecule, removeHs=False)
@@ -33,7 +41,7 @@ def main() -> None:
         if receptor is None:
             parser.error(f"could not read receptor: {args.receptor}")
 
-    state.configure(ligand, receptor)
+    state.configure(ligand, receptor, mode=MODES[args.chat_mode])
 
     from chemistree.app.server import app
 

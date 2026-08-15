@@ -16,6 +16,10 @@ import urllib.request
 from fastmcp import FastMCP
 
 BASE_URL = os.environ.get("CHEMISTREE_URL", "http://127.0.0.1:8000")
+# Set by the chat driver (app/chat.py, _PRIME_ENV = "CHEMISTREE_PRIME") when the
+# primed mode is on. Then edit results carry the refreshed fragment listing, so
+# the agent acts on node ids without a separate find/describe call.
+_PRIME = os.environ.get("CHEMISTREE_PRIME") == "1"
 mcp = FastMCP("chemistree")
 
 
@@ -44,7 +48,25 @@ def read_error(http_error: urllib.error.HTTPError) -> str:
     return str(payload.get("error", body))
 
 
-def _command(text: str) -> str:
+def format_result(data: dict, *, with_state: bool) -> str:
+    """Format a ``/command`` response for the agent.
+
+    Args:
+        data: The decoded ``/command`` JSON, with ``message`` and ``state``.
+        with_state: Append the current fragment listing (node ids, names,
+            connections) after the SMILES, so the agent can act on the new state
+            without a separate find/describe call.
+
+    Returns:
+        A one-line result, plus the fragment listing when ``with_state``.
+    """
+    base = f"{data['message']} | SMILES: {data['state']['smiles']}"
+    if with_state:
+        return f"{base}\n\nCurrent fragments:\n{data['state']['describe']}"
+    return base
+
+
+def _command(text: str, *, with_state: bool = False) -> str:
     """Run a command against the app and report the result and new SMILES."""
     request = urllib.request.Request(
         f"{BASE_URL}/command",
@@ -58,7 +80,7 @@ def _command(text: str) -> str:
         return f"error: {read_error(http_error)}"
     if "error" in data:
         return f"error: {data['error']}"
-    return f"{data['message']} | SMILES: {data['state']['smiles']}"
+    return format_result(data, with_state=with_state)
 
 
 @mcp.tool
@@ -107,7 +129,7 @@ def swap(node_id: int, group: str) -> str:
         node_id: Node whose fragment is replaced.
         group: A common group name or a SMILES with a ``[*]`` per port.
     """
-    return _command(f"swap {node_id} {group}")
+    return _command(f"swap {node_id} {group}", with_state=_PRIME)
 
 
 @mcp.tool
@@ -122,7 +144,7 @@ def add(node_id: int, group: str, position: str, reference: str) -> str:
         position: A bond count, or a synonym (ortho/meta/para, alpha/beta/gamma).
         reference: Name of the scaffold substituent to count from.
     """
-    return _command(f"add {node_id} {group} {position} {reference}")
+    return _command(f"add {node_id} {group} {position} {reference}", with_state=_PRIME)
 
 
 @mcp.tool
@@ -152,9 +174,12 @@ def mutate(
     """
     if between_first and between_second:
         return _command(
-            f"mutate {node_id} {element} between {between_first} {between_second}"
+            f"mutate {node_id} {element} between {between_first} {between_second}",
+            with_state=_PRIME,
         )
-    return _command(f"mutate {node_id} {element} {position} {reference}")
+    return _command(
+        f"mutate {node_id} {element} {position} {reference}", with_state=_PRIME
+    )
 
 
 @mcp.tool
@@ -167,13 +192,13 @@ def remove(node_id: int) -> str:
     Args:
         node_id: Leaf node to remove.
     """
-    return _command(f"remove {node_id}")
+    return _command(f"remove {node_id}", with_state=_PRIME)
 
 
 @mcp.tool
 def undo() -> str:
     """Revert the most recent edit (swap, add, mutate, or remove)."""
-    return _command("undo")
+    return _command("undo", with_state=_PRIME)
 
 
 if __name__ == "__main__":

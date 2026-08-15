@@ -18,13 +18,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+from dataclasses import dataclass
 
 from fastapi import WebSocket, WebSocketDisconnect
+
+_log = logging.getLogger(__name__)
 
 # The Claude binary and model. Override the binary for a non-default install.
 _CLAUDE_BIN = os.environ.get("CHEMISTREE_CLAUDE_BIN", "claude")
 _MODEL = "haiku"
+# Env var the chat driver sets so the MCP server (a child of the claude process)
+# attaches the refreshed fragment listing to edit results. app/mcp.py reads the
+# same name.
+_PRIME_ENV = "CHEMISTREE_PRIME"
 # Allow this project's MCP tools without a per-call prompt in headless mode.
 _ALLOWED_TOOLS = "mcp__chemistree"
 # Load only this project's MCP server. Without strict scoping Claude also loads
@@ -63,6 +71,35 @@ _SYSTEM_PROMPT = (
     "editing; do not guess. Never read, write, or run files or shell commands. "
     "Reply in one short sentence."
 )
+# The primed mode gives the agent the fragment listing up front and after each
+# edit, so it should act on the node ids directly instead of looking them up.
+_PRIMED_PROMPT = _SYSTEM_PROMPT + (
+    " You are given the current fragment listing with node ids, refreshed after "
+    "every edit; use those ids directly and do not call find or describe first "
+    "unless the listing lacks what you need. A residue request still needs nearest."
+)
+
+
+@dataclass(frozen=True)
+class ChatMode:
+    """A chat experience: its system prompt and whether it primes state.
+
+    Attributes:
+        name: Selector used by the ``--chat-mode`` CLI flag.
+        system_prompt: The full ``--append-system-prompt`` text for this mode.
+        prime_context: Seed the fragment listing at connect and refresh it in
+            every edit result, so the agent skips find/describe lookups.
+    """
+
+    name: str
+    system_prompt: str
+    prime_context: bool
+
+
+EXPLORE = ChatMode(name="explore", system_prompt=_SYSTEM_PROMPT, prime_context=False)
+PRIMED = ChatMode(name="primed", system_prompt=_PRIMED_PROMPT, prime_context=True)
+MODES: dict[str, ChatMode] = {EXPLORE.name: EXPLORE, PRIMED.name: PRIMED}
+DEFAULT_MODE = PRIMED
 
 # Tool name -> present-tense phrase shown while the tool runs.
 _TOOL_PHRASES = {
@@ -76,16 +113,24 @@ _TOOL_PHRASES = {
 }
 
 
-def build_command() -> list[str]:
+def build_command(mode: ChatMode, context: str = "") -> list[str]:
     """Build the ``claude`` argv for the persistent streaming session.
 
     The process is spawned once and reused for every turn. It reads user
     messages from stdin as stream-json and writes stream-json to stdout, so no
     per-turn message or ``--resume`` id is needed here.
 
+    Args:
+        mode: The chat mode, which chooses the system prompt.
+        context: The current fragment listing to seed. Used only when the mode
+            primes state; ignored otherwise.
+
     Returns:
         The argument list to spawn.
     """
+    prompt = mode.system_prompt
+    if mode.prime_context and context:
+        prompt += f"\n\nCurrent fragments (use these node ids directly):\n{context}"
     return [
         _CLAUDE_BIN,
         "-p",
@@ -97,7 +142,7 @@ def build_command() -> list[str]:
         "--model",
         _MODEL,
         "--append-system-prompt",
-        _SYSTEM_PROMPT,
+        prompt,
         "--mcp-config",
         _MCP_CONFIG,
         "--strict-mcp-config",
@@ -173,6 +218,9 @@ def _assistant_events(message: dict) -> list[dict]:
                 events.append({"kind": "text", "text": text})
         elif block.get("type") == "tool_use":
             name = _short_tool_name(block.get("name", ""))
+            # Log every tool call (including hidden ones) so the steps we combine
+            # away in primed mode stay visible for debugging.
+            _log.debug("tool_use: %s", name)
             # Show a status line only for molecule edits, not internal plumbing
             # (e.g. the agent's own tool discovery).
             if name in _TOOL_PHRASES:
@@ -187,7 +235,9 @@ def _short_tool_name(name: str) -> str:
     return name.split("__")[-1]
 
 
-async def chat_session(socket: WebSocket) -> None:
+async def chat_session(
+    socket: WebSocket, mode: ChatMode = DEFAULT_MODE, context: str = ""
+) -> None:
     """Bridge a browser chat panel to one persistent Claude Code process.
 
     Spawns the process once, then feeds each inbound ``{"type": "message"}`` to
@@ -196,13 +246,19 @@ async def chat_session(socket: WebSocket) -> None:
 
     Args:
         socket: The accepted WebSocket.
+        mode: The chat mode, which chooses the system prompt and whether to prime.
+        context: The current fragment listing to seed when the mode primes.
     """
     await socket.accept()
+    # In the primed mode the MCP server must attach the listing to edit results;
+    # it is a child of this process, so pass the flag down through the environment.
+    env = {**os.environ, _PRIME_ENV: "1"} if mode.prime_context else None
     proc = await asyncio.create_subprocess_exec(
-        *build_command(),
+        *build_command(mode, context),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     assert proc.stderr is not None
     drain = asyncio.create_task(_drain(proc.stderr))
