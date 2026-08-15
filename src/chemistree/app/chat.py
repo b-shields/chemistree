@@ -60,23 +60,42 @@ _BLOCKED_TOOLS = ",".join(
         "ExitPlanMode",
     ]
 )
+
+
 # Keep the agent on the molecule and its replies short for the compact feed.
-_SYSTEM_PROMPT = (
-    "You edit one molecule in a live design session. Use only the chemistree "
-    "tools (describe, smiles, find, nearest, swap, add, mutate, remove, undo) to "
-    "inspect and change it. A group can be a common name (isopropyl) or a SMILES "
-    "with one dummy [*] per attachment point ([*]C1([*])COC1 for a 2-port oxetane "
-    "linker); if a name is not recognized, pass a SMILES. When a request names a "
-    "residue (near/closest to it), you MUST call nearest to pick the node before "
-    "editing; do not guess. Never read, write, or run files or shell commands. "
-    "Reply in one short sentence."
+def _system_prompt(tools: str, primed_note: str = "") -> str:
+    """Build the agent's system prompt naming the tools a mode exposes.
+
+    Args:
+        tools: Comma-separated tool names the mode exposes, named in the prompt.
+        primed_note: Extra guidance appended for the primed mode.
+
+    Returns:
+        The full ``--append-system-prompt`` text.
+    """
+    return (
+        f"You edit one molecule in a live design session. Use only the chemistree "
+        f"tools ({tools}) to inspect and change it. A group can be a common name "
+        f"(isopropyl) or a SMILES with one dummy [*] per attachment point "
+        f"([*]C1([*])COC1 for a 2-port oxetane linker); if a name is not "
+        f"recognized, pass a SMILES. When a request names a residue (near/closest "
+        f"to it), you MUST call nearest to pick the node before editing; do not "
+        f"guess. Never read, write, or run files or shell commands. Reply in one "
+        f"short sentence.{primed_note}"
+    )
+
+
+_SYSTEM_PROMPT = _system_prompt(
+    "describe, smiles, find, nearest, swap, add, mutate, remove, undo"
 )
-# The primed mode gives the agent the fragment listing up front and after each
-# edit, so it should act on the node ids directly instead of looking them up.
-_PRIMED_PROMPT = _SYSTEM_PROMPT + (
-    " You are given the current fragment listing with node ids, refreshed after "
-    "every edit; use those ids directly and do not call find or describe first "
-    "unless the listing lacks what you need. A residue request still needs nearest."
+# The primed mode seeds the fragment listing up front and refreshes it after each
+# edit, so find/describe are blocked and the agent acts on the given ids directly.
+_PRIMED_PROMPT = _system_prompt(
+    "smiles, nearest, swap, add, mutate, remove, undo",
+    primed_note=(
+        " You are given the current fragment listing with node ids, refreshed "
+        "after every edit; use those ids directly."
+    ),
 )
 
 
@@ -89,15 +108,24 @@ class ChatMode:
         system_prompt: The full ``--append-system-prompt`` text for this mode.
         prime_context: Seed the fragment listing at connect and refresh it in
             every edit result, so the agent skips find/describe lookups.
+        blocked_tools: chemistree tool names to hide in this mode (short names,
+            e.g. "find"). Empty for explore; primed blocks the lookups priming
+            makes redundant.
     """
 
     name: str
     system_prompt: str
     prime_context: bool
+    blocked_tools: tuple[str, ...] = ()
 
 
 EXPLORE = ChatMode(name="explore", system_prompt=_SYSTEM_PROMPT, prime_context=False)
-PRIMED = ChatMode(name="primed", system_prompt=_PRIMED_PROMPT, prime_context=True)
+PRIMED = ChatMode(
+    name="primed",
+    system_prompt=_PRIMED_PROMPT,
+    prime_context=True,
+    blocked_tools=("find", "describe"),
+)
 MODES: dict[str, ChatMode] = {EXPLORE.name: EXPLORE, PRIMED.name: PRIMED}
 DEFAULT_MODE = PRIMED
 
@@ -131,6 +159,10 @@ def build_command(mode: ChatMode, context: str = "") -> list[str]:
     prompt = mode.system_prompt
     if mode.prime_context and context:
         prompt += f"\n\nCurrent fragments (use these node ids directly):\n{context}"
+    # Block the built-in tools always, plus this mode's redundant MCP lookups.
+    disallowed = _BLOCKED_TOOLS
+    for tool in mode.blocked_tools:
+        disallowed += f",{_ALLOWED_TOOLS}__{tool}"
     return [
         _CLAUDE_BIN,
         "-p",
@@ -149,7 +181,7 @@ def build_command(mode: ChatMode, context: str = "") -> list[str]:
         "--allowedTools",
         _ALLOWED_TOOLS,
         "--disallowedTools",
-        _BLOCKED_TOOLS,
+        disallowed,
     ]
 
 

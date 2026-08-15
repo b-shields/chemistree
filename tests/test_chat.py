@@ -60,6 +60,26 @@ def test_explore_mode_never_seeds_even_with_context():
     assert listing not in prompt
 
 
+def test_primed_mode_blocks_the_redundant_lookup_tools():
+    # Priming makes find/describe unnecessary, so they are disallowed and dropped
+    # from the prompt's tool list.
+    cmd = build_command(PRIMED)
+    blocked = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert "mcp__chemistree__find" in blocked
+    assert "mcp__chemistree__describe" in blocked
+    prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    assert "smiles, nearest, swap" in prompt  # the primed tool list, no find/describe
+    assert "find" not in prompt
+
+
+def test_explore_mode_keeps_the_lookup_tools():
+    # The other mode is unchanged: the agent may still look fragments up.
+    cmd = build_command(EXPLORE)
+    blocked = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert "mcp__chemistree__find" not in blocked
+    assert "mcp__chemistree__describe" not in blocked
+
+
 def test_user_message_line_encodes_a_turn():
     line = user_message_line("swap the chloro for fluoro")
     assert line.endswith(b"\n")
