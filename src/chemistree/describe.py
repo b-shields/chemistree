@@ -155,7 +155,7 @@ def rings_section(mol: Chem.Mol) -> str:
     lines = ["**Rings:**"]
     for name, ring in zip(_ring_names(len(rings)), rings):
         atoms = ", ".join(str(i) for i in ring)
-        lines.append(f"- Ring {name}: atoms {atoms}")
+        lines.append(f"- Ring {name} ({len(ring)}-membered): atoms {atoms}")
     return "\n".join(lines)
 
 

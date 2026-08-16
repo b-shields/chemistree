@@ -90,11 +90,11 @@ def test_topology_matrix_includes_the_port_column():
     assert "[1*]" in next(iter(rows.values()))
 
 
-def test_rings_section_benzene_lists_the_ring_atoms():
+def test_rings_section_benzene_lists_size_and_ring_atoms():
     mol = _fragment("[1*]c1ccccc1")
     (ring,) = _ring_atom_indices(mol)
     section = rings_section(mol)
-    assert "Ring A:" in section
+    assert "Ring A (6-membered):" in section  # size stated so the agent needn't count
     assert ", ".join(str(i) for i in ring) in section
 
 
@@ -106,5 +106,5 @@ def test_rings_section_names_each_ring_of_a_fused_system():
     # Naphthalene: two SSSR rings -> Ring A and Ring B, sharing the fusion atoms.
     mol = _fragment("[1*]c1ccc2ccccc2c1")
     section = rings_section(mol)
-    assert "Ring A:" in section
-    assert "Ring B:" in section
+    assert "Ring A (6-membered):" in section
+    assert "Ring B (6-membered):" in section
