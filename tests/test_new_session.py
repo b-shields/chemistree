@@ -62,10 +62,12 @@ def test_describe_group_shows_atom_map_topology_and_rings():
     )
     ring_detail = session.describe_group(ring)
     assert "**Atom Map:**" in ring_detail
-    assert "**Topology:**" in ring_detail
+    assert "**Positions:**" in ring_detail
     assert "**Rings:**" in ring_detail
     assert "position_id" in ring_detail  # the legend lives with the detail
     assert "**Rings:**" not in session.describe_group(methyl)  # acyclic
+    # The raw matrix is available behind the flag for comparison.
+    assert "**Topology:**" in session.describe_group(ring, use_matrix=True)
 
 
 def test_smiles_history_records_construction():

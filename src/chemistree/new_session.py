@@ -73,16 +73,21 @@ class NewDesignSession:
         """
         return describe_tree(self.tree)
 
-    def describe_group(self, group_id: int) -> str:
-        """The atom positions, rings, and topology of one group.
+    def describe_group(
+        self, group_id: int, *, radius: int = 3, use_matrix: bool = False
+    ) -> str:
+        """The atom positions, rings, and neighbourhood of one group.
 
         Args:
             group_id: Id of the group to detail.
+            radius: Farthest bond distance the positions section describes.
+            use_matrix: Show the raw topology distance matrix instead of the
+                chemist's-terms positions section (for comparison).
 
         Returns:
-            A markdown section with the group's Atom Map, Rings, and Topology.
+            A markdown section with the group's Atom Map, Rings, and positions.
         """
-        return describe_group(self.tree, group_id)
+        return describe_group(self.tree, group_id, radius=radius, use_matrix=use_matrix)
 
     def molecule(self) -> Chem.Mol:
         """The current molecule, reconstructed from the tree."""

@@ -1,13 +1,43 @@
-"""Agent-facing group description: Atom Map, Rings, and Topology renderers."""
+"""Agent-facing group description: Atom Map, Rings, Topology, and Positions."""
+
+import re
 
 from rdkit import Chem
 
-from chemistree.describe import atom_map, rings_section, topology_matrix
+from chemistree.describe import atom_map, positions, rings_section, topology_matrix
 
 
 def _fragment(smiles: str) -> Chem.Mol:
     """A fragment mol with explicit hydrogens, as the session stores it."""
     return Chem.AddHs(Chem.MolFromSmiles(smiles))
+
+
+def _positions_map(block: str) -> dict[int, dict[str, list[int]]]:
+    """Parse a positions block into ``{atom_id: {label: [neighbor ids]}}``.
+
+    Neighbor tokens may carry a ``·[n*]`` port annotation; only the leading id is
+    kept, so tests assert relationships without depending on the annotation text.
+    """
+    out: dict[int, dict[str, list[int]]] = {}
+    for line in block.splitlines():
+        if not line.startswith("- atom "):
+            continue
+        head, _, rels = line.partition(" — ")
+        atom_id = int(head.split()[2])
+        labels: dict[str, list[int]] = {}
+        if rels:
+            for part in rels.split(";"):
+                label, _, ids = part.strip().partition(":")
+                match = [re.match(r"\d+", t.strip()) for t in ids.split(",")]
+                labels[label.strip()] = [int(m.group()) for m in match if m]
+        out[atom_id] = labels
+    return out
+
+
+def _descriptor(block: str, atom_id: int) -> str:
+    """The parenthesized descriptor of one atom's positions line."""
+    line = next(ln for ln in block.splitlines() if ln.startswith(f"- atom {atom_id} ("))
+    return line[line.index("(") + 1 : line.index(")")]
 
 
 def _parse_keeping_hs(smiles: str) -> Chem.Mol:
@@ -108,3 +138,76 @@ def test_rings_section_names_each_ring_of_a_fused_system():
     section = rings_section(mol)
     assert "Ring A (6-membered):" in section
     assert "Ring B (6-membered):" in section
+
+
+def _distances_from(mol: Chem.Mol, source: int, distance: int) -> list[int]:
+    """Heavy-atom ids exactly ``distance`` bonds from ``source``."""
+    dmat = Chem.GetDistanceMatrix(mol)
+    return sorted(
+        a.GetIdx()
+        for a in mol.GetAtoms()
+        if a.GetAtomicNum() > 1 and int(dmat[source][a.GetIdx()]) == distance
+    )
+
+
+def test_positions_aromatic_uses_ortho_meta_para():
+    mol = _fragment("[1*]c1ccccc1")
+    carbons = [a.GetIdx() for a in mol.GetAtoms() if a.GetIsAromatic()]
+    x = carbons[0]
+    labels = _positions_map(positions(mol))[x]
+    assert labels["ortho"] == _distances_from(mol, x, 1)
+    assert labels["meta"] == _distances_from(mol, x, 2)
+    assert labels["para"] == _distances_from(mol, x, 3)
+
+
+def test_positions_aliphatic_uses_greek():
+    mol = _fragment("[1*]C1CCCCC1")  # cyclohexane: non-aromatic ring
+    carbon = next(a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 6)
+    labels = _positions_map(positions(mol))[carbon]
+    assert labels["alpha"] == _distances_from(mol, carbon, 1)
+    assert labels["beta"] == _distances_from(mol, carbon, 2)
+    assert labels["gamma"] == _distances_from(mol, carbon, 3)
+    assert "ortho" not in labels  # aromatic terms never used off an aromatic ring
+
+
+def test_positions_lists_hydrogen_ids_for_grow():
+    mol = _fragment("[1*]c1ccccc1")
+    carbon = next(
+        a.GetIdx()
+        for a in mol.GetAtoms()
+        if a.GetIsAromatic() and a.GetTotalNumHs(includeNeighbors=True) == 1
+    )
+    hydrogen = next(
+        n.GetIdx()
+        for n in mol.GetAtomWithIdx(carbon).GetNeighbors()
+        if n.GetAtomicNum() == 1
+    )
+    assert f"H {hydrogen}" in _descriptor(positions(mol), carbon)
+
+
+def test_positions_annotates_ports_on_bearer_and_as_landmark():
+    mol = _fragment("[1*]c1ccccc1")
+    bearer = next(
+        a.GetIdx()
+        for a in mol.GetAtoms()
+        if any(n.GetAtomicNum() == 0 for n in a.GetNeighbors())
+    )
+    block = positions(mol)
+    assert "bears [1*]" in _descriptor(block, bearer)  # the site itself
+    # An ortho neighbour of the bearer lists it with the port annotation.
+    neighbor = next(
+        n.GetIdx()
+        for n in mol.GetAtomWithIdx(bearer).GetNeighbors()
+        if n.GetAtomicNum() > 1
+    )
+    line = next(ln for ln in block.splitlines() if ln.startswith(f"- atom {neighbor} "))
+    assert f"{bearer}·[1*]" in line
+
+
+def test_positions_radius_limits_the_range():
+    mol = _fragment("[1*]c1ccccc1")
+    x = next(a.GetIdx() for a in mol.GetAtoms() if a.GetIsAromatic())
+    labels = _positions_map(positions(mol, radius=1))[x]
+    assert labels["ortho"] == _distances_from(mol, x, 1)
+    assert "meta" not in labels  # radius 1 stops at ortho
+    assert "para" not in labels
