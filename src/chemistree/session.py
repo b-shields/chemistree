@@ -1,37 +1,34 @@
-"""High-level design session: one stateful object per molecule.
+"""Design session: direct, id-based editing of one molecule.
 
-``DesignSession`` owns a fragment tree (and an optional receptor) so it can be held
-in a single global and persist across LLM tool calls. It is a thin boundary: the
-caller passes names, ids, and positions; the session resolves them deterministically
-and runs the edit. Group arguments accept a curated name ("isopropyl") or a SMILES.
+``DesignSession`` surfaces a precise map of every group and its atom positions
+through :meth:`describe`, and edits by direct rdkit atom id — no fuzzy name or
+position resolution. It fragments the molecule into a tree and normalizes every
+fragment to explicit hydrogens so each atom (heavy or H) has a stable, addressable
+id. Structural edits go through the tree's ``resplice`` so the tree always matches
+what constructing from the edited molecule would give.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
+import numpy as np
 from rdkit import Chem
 
 from chemistree.annotations import annotate
 from chemistree.chem import prepare_molecule
-from chemistree.edits import add_substituent, mutate_atom
-from chemistree.edits import swap as _swap_fragment
-from chemistree.errors import NotFound
+from chemistree.describe import describe_group, describe_tree
+from chemistree.edits import grow_region, mutate_region, swap_region
+from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor
-from chemistree.selection import (
-    resolve_between,
-    resolve_shared_site,
-    resolve_site,
-    select,
-    select_one,
-)
-from chemistree.tree import RemovedSubtree
+from chemistree.tree import FragmentNode
 
 
 class DesignSession:
-    """A molecule being edited, with stable node ids and optional receptor context."""
+    """A molecule being edited, with stable node and atom ids."""
 
     def __init__(
         self,
@@ -40,7 +37,7 @@ class DesignSession:
         *,
         three_d: bool = True,
     ):
-        """Prepare a molecule and fragment it into an editable tree.
+        """Prepare a molecule, fragment it, and normalize fragments to explicit H.
 
         Args:
             molecule: A SMILES string or Mol for the ligand.
@@ -48,29 +45,49 @@ class DesignSession:
             three_d: Prepare the ligand with explicit hydrogens and a 3D conformer.
         """
         self.tree = fragment(prepare_molecule(molecule, three_d=three_d))
+        self._normalize_hydrogens()
         self.receptor = Receptor(receptor) if receptor is not None else None
         self._undo_stack: list[Callable[[], None]] = []
-        self._last_removed: RemovedSubtree | None = None
         self.smiles_history: list[str] = [self.smiles()]
+
+    def _normalize_hydrogens(self) -> None:
+        """Make every fragment's hydrogens explicit, so each atom has a stable id.
+
+        Coordinates are added only when the fragment already has a conformer, so
+        the 2D-only path still gets addressable hydrogens without a bond vector.
+        """
+        for node in self.tree.nodes:
+            mol = node.current.mol
+            explicit = Chem.AddHs(mol, addCoords=mol.GetNumConformers() > 0)
+            node.history[0] = Fragment(explicit)
 
     def _record(self) -> None:
         """Append the current SMILES to the history, in edit order."""
         self.smiles_history.append(self.smiles())
 
     def describe(self) -> str:
-        """A readable markdown summary of the current fragments."""
-        return annotate(self.tree).to_markdown()
+        """A compact markdown inventory of the current groups.
 
-    def annotations(self, *, atoms: bool = False) -> dict:
-        """A JSON-serializable description of the current fragments.
+        Lists each group's id, name, fragment, role, and connections. Call
+        :meth:`describe_group` for a group's atom positions, rings, and topology.
+        """
+        return describe_tree(self.tree)
+
+    def describe_group(
+        self, group_id: int, *, radius: int = 3, use_matrix: bool = False
+    ) -> str:
+        """The atom positions, rings, and neighbourhood of one group.
 
         Args:
-            atoms: Include per-atom detail on each node.
+            group_id: Id of the group to detail.
+            radius: Farthest bond distance the positions section describes.
+            use_matrix: Show the raw topology distance matrix instead of the
+                chemist's-terms positions section (for comparison).
 
         Returns:
-            The annotation as nested dicts.
+            A markdown section with the group's Atom Map, Rings, and positions.
         """
-        return annotate(self.tree, atoms=atoms).to_dict()
+        return describe_group(self.tree, group_id, radius=radius, use_matrix=use_matrix)
 
     def molecule(self) -> Chem.Mol:
         """The current molecule, reconstructed from the tree."""
@@ -80,165 +97,132 @@ class DesignSession:
         """Canonical SMILES of the current molecule, without explicit hydrogens."""
         return str(Chem.MolToSmiles(Chem.RemoveHs(self.tree.reconstruct())))
 
-    def find(
-        self, *, name: str | None = None, classification: str | None = None
-    ) -> list[int]:
-        """Ids of nodes matching a name and/or coarse class.
+    def swap(self, group_id: int, group: str | Chem.Mol) -> None:
+        """Replace a group's fragment with a new group.
 
         Args:
-            name: Required common name (see ``name_fragment``).
-            classification: Required coarse class (see ``classify_fragment``).
-
-        Returns:
-            The matching node ids, in tree order.
-        """
-        matches = select(self.tree, name=name, classification=classification)
-        return [node.id for node in matches if node.id is not None]
-
-    def swap(self, node_id: int, group: str | Chem.Mol) -> None:
-        """Replace a node's fragment with a new group.
-
-        Args:
-            node_id: Id of the node to edit.
+            group_id: Id of the group to replace.
             group: A curated group name or a SMILES/Mol with matching ports.
         """
-        node = self.tree.node(node_id)
-        _swap_fragment(node, _as_group(group))
-        self._undo_stack.append(node.undo)
-        self._record()
+        node = self.tree.node(group_id)
+        region = swap_region(node.current, _as_group(group))
+        self._apply(node, region)
 
-    def add(
-        self,
-        scaffold_id: int,
-        group: str | Chem.Mol,
-        *,
-        position: int | str,
-        reference: str,
-    ) -> int:
-        """Grow a group at a position relative to one of the scaffold's substituents.
+    def grow(self, group_id: int, position_id: int, group: str | Chem.Mol) -> int:
+        """Grow a group where a hydrogen is, following fragmentation rules.
+
+        The group takes the place of the hydrogen at ``position_id`` (its bond
+        vector is the new group's exit vector). Whether the group becomes its own
+        node or merges into the target follows the same policy as construction.
 
         Args:
-            scaffold_id: Id of the scaffold node to grow from.
+            group_id: Id of the group bearing the hydrogen.
+            position_id: Atom id of the hydrogen to replace.
             group: A curated group name or a SMILES/Mol with one port.
-            position: A bond count, or a ring synonym (ortho/meta/para).
-            reference: Name of the scaffold substituent to count from.
 
         Returns:
-            Index of the scaffold atom the group was grown at.
+            Id of the group that now carries the grown group (a new node when the
+            growth splits off, else ``group_id``).
 
         Raises:
-            NotFound: If the reference or a valid site is not found.
-            Ambiguous: If the reference or the site is not unique.
+            ValueError: If ``position_id`` is not a hydrogen of the group.
         """
-        scaffold = self.tree.node(scaffold_id)
-        substituents = select(self.tree, name=reference, neighbor_of=scaffold)
-        if not substituents:
-            raise NotFound(f"no {reference} on the scaffold")
-        site = resolve_shared_site(self.tree, scaffold, substituents, position)
-        add_substituent(scaffold, site, _as_group(group))
-        self._undo_stack.append(scaffold.undo)
-        self._record()
-        return site
+        node = self.tree.node(group_id)
+        region = grow_region(node.current, position_id, _as_group(group))
+        sub_nodes = self._apply(node, region)
+        grown = max(sub_nodes, key=lambda n: n.id if n.id is not None else -1)
+        assert grown.id is not None
+        return grown.id
 
-    def mutate(
-        self,
-        scaffold_id: int,
-        element: str,
-        *,
-        between: tuple[str, str] | None = None,
-        reference: str | None = None,
-        position: int | str | None = None,
-    ) -> int:
-        """Change one ring atom's element, addressing it by its neighbors.
-
-        The target atom is either the one between two named substituents
-        (``between``), or one at a ``position`` offset from a single
-        ``reference``. This is the atom-level path to ring heteroatom edits, e.g.
-        turning the ring CH between an amino and a methyl into N to make a
-        2-aminopyridine.
+    def mutate(self, group_id: int, position_id: int, element: str) -> int:
+        """Change one heavy atom's element, addressing it by its atom id.
 
         Args:
-            scaffold_id: Id of the ring node to edit.
+            group_id: Id of the group to edit.
+            position_id: Atom id of the heavy atom to change.
             element: New element, as a symbol ("N") or name ("nitrogen").
-            between: Names of two substituents the target atom sits between.
-            reference: Name of one substituent to count from (with ``position``).
-            position: A bond count, or a ring synonym, from ``reference``.
 
         Returns:
-            Index of the mutated atom in the scaffold's fragment.
+            The mutated atom id (``position_id``).
 
         Raises:
-            ValueError: If the addressing is incomplete or the element is unknown.
-            NotFound: If no such atom exists. Ambiguous: If it is not unique.
+            ValueError: If ``position_id`` is not a heavy atom, or the change
+                leaves an invalid valence.
         """
-        scaffold = self.tree.node(scaffold_id)
-        if between is not None:
-            first = select_one(
-                self.tree, description=between[0], name=between[0], neighbor_of=scaffold
+        node = self.tree.node(group_id)
+        atom = node.current.mol.GetAtomWithIdx(position_id)
+        if atom.GetAtomicNum() <= 1:
+            raise ValueError(
+                f"atom {position_id} is not a heavy atom; mutate changes a heavy atom"
             )
-            second = select_one(
-                self.tree, description=between[1], name=between[1], neighbor_of=scaffold
-            )
-            atom = resolve_between(self.tree, scaffold, first, second)
-        elif reference is not None and position is not None:
-            substituent = select_one(
-                self.tree, description=reference, name=reference, neighbor_of=scaffold
-            )
-            atom = resolve_site(self.tree, scaffold, substituent, position)
-        else:
-            raise ValueError("mutate needs between=(a, b) or reference and position")
-        mutate_atom(scaffold, atom, _element_number(element))
-        self._undo_stack.append(scaffold.undo)
-        self._record()
-        return atom
+        region = mutate_region(node.current, position_id, _element_number(element))
+        self._apply(node, region)
+        return position_id
 
-    def remove(self, node_id: int) -> None:
-        """Delete a node and its subtree, capping the parent with hydrogen.
-
-        "Delete the phenol ring" removes the ring and its own substituents and
-        caps the anilino N to -NH2. The core scaffold (the tree's root) cannot be
-        removed this way.
+    def remove(self, group_id: int) -> None:
+        """Delete a group and its subtree, capping the parent with hydrogen.
 
         Args:
-            node_id: Id of the node to remove, along with everything hanging off
-                it away from the core.
+            group_id: Id of the group to remove.
 
         Raises:
-            ValueError: If the node is the root scaffold.
+            ValueError: If the group is the root scaffold.
         """
-        removed = self.tree.remove_subtree(self.tree.node(node_id))
-        self._last_removed = removed
+        removed = self.tree.remove_subtree(self.tree.node(group_id))
         self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
         self._record()
 
-    def fill(self, group: str | Chem.Mol) -> int:
-        """Grow a group at the site the last ``remove`` freed.
-
-        After removing a subtree, the parent's port is capped with hydrogen.
-        This grows a new group back at that same atom, so "delete the phenyl,
-        then put a methyl in its place" is two steps against one anchor.
+    def distance(self, residue_id: str) -> str:
+        """Report how close each group is to a receptor residue.
 
         Args:
-            group: A curated group name or a SMILES/Mol with one port.
+            residue_id: A residue name ("PHE") or name with number ("PHE382").
 
         Returns:
-            Index of the scaffold atom the group was grown at.
+            Markdown: a table of each group's minimum heavy-atom distance to the
+            residue, sorted closest first, then a per-atom details section.
 
         Raises:
-            ValueError: If no removal has freed a site to fill.
+            ValueError: If no receptor is loaded or the ligand lacks 3D coordinates.
+            NotFound: If no residue matches ``residue_id``.
         """
-        if self._last_removed is None:
-            raise ValueError("nothing was removed, so there is no site to fill")
-        parent = self._last_removed.parent
-        site = self._last_removed.parent_site
-        add_substituent(parent, site, _as_group(group))
-        self._last_removed = None
-        self._undo_stack.append(parent.undo)
+        if self.receptor is None:
+            raise ValueError("spatial distances need a receptor")
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("spatial distances need a ligand with 3D coordinates")
+        residue = self.receptor.residue_atoms(residue_id)
+        labels = {node.id: node for node in annotate(self.tree).nodes}
+        groups = []
+        for node in self.tree.nodes:
+            assert node.id is not None
+            annotation = labels[node.id]
+            groups.append(
+                _GroupDistances(
+                    node_id=node.id,
+                    label=annotation.name or annotation.classification,
+                    per_atom=_atom_distances(node.current.mol, residue),
+                )
+            )
+        groups.sort(key=lambda g: g.minimum)
+        return _distance_report(residue_id, groups)
+
+    def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
+        """Resplice an edited region into the tree, recording undo and history."""
+        sub_nodes, undo = self.tree.resplice(node, region_mol)
+        self._normalize_new_hydrogens(sub_nodes)
+        self._undo_stack.append(undo)
         self._record()
-        return site
+        return sub_nodes
+
+    def _normalize_new_hydrogens(self, nodes: list[FragmentNode]) -> None:
+        """Make hydrogens explicit on freshly spliced fragments, for stable ids."""
+        for node in nodes:
+            mol = node.current.mol
+            explicit = Chem.AddHs(mol, addCoords=mol.GetNumConformers() > 0)
+            node.history[-1] = Fragment(explicit)
 
     def undo(self) -> None:
-        """Revert the most recent edit (swap, add, mutate, or remove).
+        """Revert the most recent edit.
 
         Raises:
             ValueError: If there is nothing to undo.
@@ -248,33 +232,50 @@ class DesignSession:
         self._undo_stack.pop()()
         self._record()
 
-    def nearest(self, name: str, residue: str) -> int:
-        """Id of the named fragment closest to a named receptor residue.
 
-        The distance resolution lives in ``Receptor``; the session only checks its
-        preconditions and selects the candidates.
+@dataclass(frozen=True)
+class _GroupDistances:
+    """One group's distances to a residue: a label and per-heavy-atom distances."""
 
-        Args:
-            name: Common name of the ligand fragment (e.g. "methyl").
-            residue: Residue name in the receptor (e.g. "PHE").
+    node_id: int | None
+    label: str
+    per_atom: list[tuple[int, str, float]]
 
-        Returns:
-            Id of the closest matching node.
+    @property
+    def minimum(self) -> float:
+        """The closest heavy-atom approach of this group to the residue."""
+        return min(distance for _, _, distance in self.per_atom)
 
-        Raises:
-            ValueError: If no receptor is loaded or the ligand lacks 3D coordinates.
-            NotFound: If no matching fragment or residue exists.
-        """
-        if self.receptor is None:
-            raise ValueError("spatial resolution needs a receptor")
-        if not self.tree.nodes[0].current.mol.GetNumConformers():
-            raise ValueError("spatial resolution needs a ligand with 3D coordinates")
-        candidates = select(self.tree, name=name)
-        if not candidates:
-            raise NotFound(f"no {name} in the ligand")
-        node = self.receptor.nearest(candidates, residue)
-        assert node.id is not None
-        return node.id
+
+def _atom_distances(mol: Chem.Mol, residue: np.ndarray) -> list[tuple[int, str, float]]:
+    """Each heavy atom's id, symbol, and minimum distance to the residue atoms."""
+    conf = mol.GetConformer()
+    out = []
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() <= 1:
+            continue
+        position = np.array(list(conf.GetAtomPosition(atom.GetIdx())))
+        closest = float(np.sqrt(((residue - position) ** 2).sum(-1)).min())
+        out.append((atom.GetIdx(), atom.GetSymbol(), closest))
+    return out
+
+
+def _distance_report(residue_id: str, groups: list[_GroupDistances]) -> str:
+    """Render the distance table and per-group details, groups already sorted."""
+    lines = [
+        f"# Distances to {residue_id}",
+        "",
+        "| group | min distance (A) |",
+        "|---|---|",
+    ]
+    for group in groups:
+        lines.append(f"| [{group.node_id}] {group.label} | {group.minimum:.2f} |")
+    lines += ["", "## Details"]
+    for group in groups:
+        lines.append(f"### [{group.node_id}] {group.label}")
+        for idx, symbol, distance in group.per_atom:
+            lines.append(f"- atom {idx} ({symbol}): {distance:.2f}")
+    return "\n".join(lines)
 
 
 _ELEMENT_NAMES = {
@@ -310,8 +311,6 @@ def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:
 
     Raises:
         ValueError: If a string is neither a known group name nor valid SMILES.
-            The message names the token so the agent can retry a synonym or a
-            SMILES instead of seeing a confusing downstream parse error.
     """
     if not isinstance(group, str):
         return group

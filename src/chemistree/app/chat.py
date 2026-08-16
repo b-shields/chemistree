@@ -78,23 +78,25 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
         f"tools ({tools}) to inspect and change it. A group can be a common name "
         f"(isopropyl) or a SMILES with one dummy [*] per attachment point "
         f"([*]C1([*])COC1 for a 2-port oxetane linker); if a name is not "
-        f"recognized, pass a SMILES. When a request names a residue (near/closest "
-        f"to it), you MUST call nearest to pick the node before editing; do not "
-        f"guess. Never read, write, or run files or shell commands. Reply in one "
-        f"short sentence.{primed_note}"
+        f"recognized, pass a SMILES. Group ids come from the group listing; before "
+        f"grow or mutate, call describe_group(id) to get the atom position ids. "
+        f"When a request names a residue (near/closest to it), call distance to see "
+        f"which group is closest before editing. Never read, write, or run files or "
+        f"shell commands. Reply in one short sentence.{primed_note}"
     )
 
 
 _SYSTEM_PROMPT = _system_prompt(
-    "describe, smiles, find, nearest, swap, add, mutate, remove, undo"
+    "describe, describe_group, smiles, swap, grow, mutate, remove, undo, distance"
 )
-# The primed mode seeds the fragment listing up front and refreshes it after each
-# edit, so find/describe are blocked and the agent acts on the given ids directly.
+# The primed mode seeds the group listing up front and refreshes it after each edit,
+# so the describe overview is blocked; the agent acts on the given ids and calls
+# describe_group for atom positions.
 _PRIMED_PROMPT = _system_prompt(
-    "smiles, nearest, swap, add, mutate, remove, undo",
+    "describe_group, smiles, swap, grow, mutate, remove, undo, distance",
     primed_note=(
-        " You are given the current fragment listing with node ids, refreshed "
-        "after every edit; use those ids directly."
+        " You are given the current group listing, refreshed after every edit; use "
+        "those ids directly and call describe_group(id) for atom positions."
     ),
 )
 
@@ -124,7 +126,7 @@ PRIMED = ChatMode(
     name="primed",
     system_prompt=_PRIMED_PROMPT,
     prime_context=True,
-    blocked_tools=("find", "describe"),
+    blocked_tools=("describe",),
 )
 MODES: dict[str, ChatMode] = {EXPLORE.name: EXPLORE, PRIMED.name: PRIMED}
 DEFAULT_MODE = PRIMED
@@ -132,11 +134,13 @@ DEFAULT_MODE = PRIMED
 # Tool name -> present-tense phrase shown while the tool runs.
 _TOOL_PHRASES = {
     "swap": "swapping the fragment",
-    "add": "adding a group",
-    "find": "finding the fragment",
-    "nearest": "locating the nearest residue",
+    "grow": "growing a group",
+    "mutate": "mutating an atom",
+    "remove": "removing a group",
     "undo": "undoing the last edit",
+    "distance": "measuring distances",
     "describe": "reading the molecule",
+    "describe_group": "reading a group",
     "smiles": "reading the molecule",
 }
 

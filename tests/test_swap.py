@@ -175,6 +175,11 @@ def test_swap_reconciles_bare_ports_on_a_two_port_linker():
     from chemistree import DesignSession
 
     session = DesignSession("c1ccccc1Nc1ccccc1", three_d=False)
-    (amine_id,) = session.find(name="amine")
+    # The -NH- linker is the two-port, non-ring node.
+    amine_id = next(
+        n.id
+        for n in session.tree.nodes
+        if len(n.current.ports) == 2 and n.current.mol.GetRingInfo().NumRings() == 0
+    )
     session.swap(amine_id, "[*]O[*]")
     assert session.smiles() == str(Chem.CanonSmiles("c1ccccc1Oc1ccccc1"))

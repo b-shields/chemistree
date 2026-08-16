@@ -85,8 +85,22 @@ def _command(text: str, *, with_state: bool = False) -> str:
 
 @mcp.tool
 def describe() -> str:
-    """List the molecule's fragments with their node ids, names, and connections."""
+    """List the molecule's groups with their ids, names, and connections."""
     return str(_state()["describe"])
+
+
+@mcp.tool
+def describe_group(group_id: int) -> str:
+    """Show one group's atom positions, rings, and neighbourhood.
+
+    Call this before ``grow`` or ``mutate`` to get the atom **position ids**: each
+    heavy atom, the ids of its hydrogens (grow targets), and its neighbours as
+    ortho/meta/para or greek terms relative to the group's substituents.
+
+    Args:
+        group_id: Id of the group to detail (from ``describe``).
+    """
+    return _command(f"group {group_id}")
 
 
 @mcp.tool
@@ -96,109 +110,82 @@ def smiles() -> str:
 
 
 @mcp.tool
-def find(name: str) -> str:
-    """Node ids of fragments with a common name (e.g. 'chloro', 'phenyl')."""
-    return _command(f"find {name}")
-
-
-@mcp.tool
-def nearest(name: str, residue: str) -> str:
-    """Node id of the fragment named ``name`` closest to a receptor residue.
-
-    Always use this to pick the node when a request mentions a residue (e.g. "the
-    chloro near ALA37"): it measures distance, so it resolves *which* matching
-    fragment the request means. Do not guess the node in that case.
-
-    Args:
-        name: Fragment common name (e.g. 'chloro').
-        residue: Residue name in the receptor (e.g. 'PHE').
-    """
-    return _command(f"nearest {name} {residue}")
-
-
-@mcp.tool
 def swap(node_id: int, group: str) -> str:
-    """Replace the fragment at ``node_id`` with a group.
+    """Replace the whole group at ``node_id`` with a new group.
 
     The group is a common name ('trifluoromethyl') or a SMILES with one dummy
     ``[*]`` per attachment point ('[*]C1([*])COC1' for a 2-port oxetane linker);
-    if a name is not recognized, pass a SMILES. When the request names a residue,
-    get ``node_id`` from ``nearest`` first — do not guess which fragment is meant.
+    if a name is not recognized, pass a SMILES.
 
     Args:
-        node_id: Node whose fragment is replaced.
+        node_id: Group whose fragment is replaced (from ``describe``).
         group: A common group name or a SMILES with a ``[*]`` per port.
     """
     return _command(f"swap {node_id} {group}", with_state=_PRIME)
 
 
 @mcp.tool
-def add(node_id: int, group: str, position: str, reference: str) -> str:
-    """Grow a group on a scaffold, relative to one of its substituents.
+def grow(node_id: int, position_id: int, group: str) -> str:
+    """Grow a group where a hydrogen is, at a specific position.
 
-    When the request names a residue, get ``node_id`` from ``nearest`` first.
+    Get ``position_id`` from ``describe_group(node_id)`` — it is the id of a
+    hydrogen on the atom you want to grow from (e.g. the hydrogen ortho to a named
+    substituent).
 
     Args:
-        node_id: Scaffold node to grow from.
+        node_id: Group bearing the hydrogen (from ``describe``).
+        position_id: Id of the hydrogen to replace (from ``describe_group``).
         group: A common group name, or a SMILES with one dummy ``[*]`` port.
-        position: A bond count, or a synonym (ortho/meta/para, alpha/beta/gamma).
-        reference: Name of the scaffold substituent to count from.
     """
-    return _command(f"add {node_id} {group} {position} {reference}", with_state=_PRIME)
+    return _command(f"grow {node_id} {position_id} {group}", with_state=_PRIME)
 
 
 @mcp.tool
-def mutate(
-    node_id: int,
-    element: str,
-    between_first: str = "",
-    between_second: str = "",
-    position: str = "",
-    reference: str = "",
-) -> str:
-    """Change one ring atom's element (e.g. aromatic C to N for a pyridine).
+def mutate(node_id: int, position_id: int, element: str) -> str:
+    """Change one heavy atom's element (e.g. a ring carbon to N for a pyridine).
 
-    Address the atom either by the two substituents it sits between, or by a
-    position relative to one substituent. Use this for ring heteroatom edits,
-    e.g. an aniline to a 2-aminopyridine: mutate the ring carbon between the
-    amino and the methyl to nitrogen.
+    Get ``position_id`` from ``describe_group(node_id)`` — it is the id of the
+    heavy atom to change (e.g. the ring carbon meta to a named substituent).
 
     Args:
-        node_id: Ring node to edit.
+        node_id: Group to edit (from ``describe``).
+        position_id: Id of the heavy atom to change (from ``describe_group``).
         element: New element as a symbol ("N") or name ("nitrogen").
-        between_first: One substituent the target atom sits between.
-        between_second: The other substituent it sits between.
-        position: A bond count or ring synonym from ``reference`` (alternative
-            to ``between``).
-        reference: Name of the substituent to count from (with ``position``).
     """
-    if between_first and between_second:
-        return _command(
-            f"mutate {node_id} {element} between {between_first} {between_second}",
-            with_state=_PRIME,
-        )
-    return _command(
-        f"mutate {node_id} {element} {position} {reference}", with_state=_PRIME
-    )
+    return _command(f"mutate {node_id} {position_id} {element}", with_state=_PRIME)
 
 
 @mcp.tool
 def remove(node_id: int) -> str:
-    """Delete a leaf fragment, capping its parent with hydrogen.
+    """Delete a leaf group, capping its parent with hydrogen.
 
     Use this to prune a terminal group or ring, e.g. "delete the phenol ring".
     Only a leaf can be removed; an internal linker raises an error.
 
     Args:
-        node_id: Leaf node to remove.
+        node_id: Leaf group to remove (from ``describe``).
     """
     return _command(f"remove {node_id}", with_state=_PRIME)
 
 
 @mcp.tool
 def undo() -> str:
-    """Revert the most recent edit (swap, add, mutate, or remove)."""
+    """Revert the most recent edit (swap, grow, mutate, or remove)."""
     return _command("undo", with_state=_PRIME)
+
+
+@mcp.tool
+def distance(residue: str) -> str:
+    """Report how close each group is to a receptor residue.
+
+    Use this when a request names a residue (e.g. "near ASP") to see which group is
+    closest before editing: it returns a table of per-group minimum distances,
+    closest first, then per-atom detail.
+
+    Args:
+        residue: Residue name ('ASP') or name with number ('ASP381').
+    """
+    return _command(f"distance {residue}")
 
 
 if __name__ == "__main__":

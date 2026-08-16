@@ -11,13 +11,15 @@ def run_command(session: DesignSession, text: str) -> str:
     Supported commands::
 
         swap <id> <group>
-        add <id> <group> <position> <reference>
-        mutate <id> <element> between <ref_a> <ref_b>
-        mutate <id> <element> <position> <reference>
+        grow <id> <position_id> <group>
+        mutate <id> <position_id> <element>
         remove <id>
         undo
-        find <name>
-        nearest <name> <residue>
+        group <id>
+        distance <residue>
+
+    Ids come from ``describe`` (the group overview); atom position ids come from
+    ``group <id>`` (``describe_group``).
 
     Args:
         session: The session to edit.
@@ -36,39 +38,23 @@ def run_command(session: DesignSession, text: str) -> str:
 
     if command == "swap":
         session.swap(int(args[0]), " ".join(args[1:]))
-        return f"swapped node {args[0]}"
-    if command == "add":
-        node_id, group, position, reference = args[0], args[1], args[2], args[3]
-        session.add(
-            int(node_id), group, position=_position(position), reference=reference
-        )
-        return f"grew {group} on node {node_id}"
+        return f"swapped group {args[0]}"
+    if command == "grow":
+        node_id, position_id, group = args[0], args[1], " ".join(args[2:])
+        session.grow(int(node_id), int(position_id), group)
+        return f"grew {group} at position {position_id}"
     if command == "mutate":
-        node_id, element = args[0], args[1]
-        if len(args) >= 5 and args[2] == "between":
-            session.mutate(int(node_id), element, between=(args[3], args[4]))
-        else:
-            session.mutate(
-                int(node_id),
-                element,
-                position=_position(args[2]),
-                reference=args[3],
-            )
-        return f"mutated node {node_id} to {element}"
+        node_id, position_id, element = args[0], args[1], args[2]
+        session.mutate(int(node_id), int(position_id), element)
+        return f"mutated position {position_id} to {element}"
     if command == "remove":
         session.remove(int(args[0]))
-        return f"removed node {args[0]}"
+        return f"removed group {args[0]}"
     if command == "undo":
         session.undo()
         return "reverted the last edit"
-    if command == "find":
-        return f"{args[0]}: {session.find(name=args[0])}"
-    if command == "nearest":
-        name, residue = args[0], args[1]
-        return f"{name} nearest {residue}: node {session.nearest(name, residue)}"
+    if command == "group":
+        return session.describe_group(int(args[0]))
+    if command == "distance":
+        return session.distance(args[0])
     raise ValueError(f"unknown command: {command!r}")
-
-
-def _position(text: str) -> int | str:
-    """A bond count if numeric, else a ring synonym (ortho/meta/para)."""
-    return int(text) if text.lstrip("-").isdigit() else text

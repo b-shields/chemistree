@@ -11,7 +11,7 @@ from rdkit.Geometry import Point3D
 from chemistree import DesignSession
 from chemistree.errors import NotFound
 from chemistree.fragment import Fragment
-from chemistree.receptor import Receptor, _heavy_positions, min_distance
+from chemistree.receptor import Receptor, min_distance
 from chemistree.tree import FragmentNode
 
 DATA = pathlib.Path(__file__).parent / "data" / "abl1"
@@ -89,42 +89,11 @@ def _abl1_session() -> DesignSession:
     return DesignSession(ligand, receptor)
 
 
-def test_abl1_nearest_disambiguates_duplicate_fragments():
-    # The ligand has two chlorines; a residue name selects the one in its pocket.
-    session = _abl1_session()
-    near_asp = session.nearest("chloro", "ASP")
-    near_lys = session.nearest("chloro", "LYS")
-    assert near_asp != near_lys
-
-    # The ASP-resolved chlorine genuinely contacts an ASP residue.
-    node = session.tree.node(near_asp)
-    contact = min(
-        min_distance(
-            _heavy_positions(node.current.mol), session.receptor._positions(r.atoms)
-        )
-        for r in session.receptor.residues("ASP")
-    )
-    assert contact < 4.0
-
-
 def test_pocket_residues_line_the_binding_site():
     session = _abl1_session()
     pocket = session.receptor.pocket(session.molecule())
     assert len(pocket) > 5
     assert "ASP" in {residue.name for residue in pocket}  # a known contact
-
-
-def test_nearest_requires_receptor():
-    session = DesignSession("Cc1ccc(C)cc1", three_d=False)
-    with pytest.raises(ValueError, match="receptor"):
-        session.nearest("methyl", "PHE")
-
-
-def test_nearest_requires_posed_ligand():
-    receptor = _receptor([("PHE", 1, (0, 0, 0))]).mol
-    session = DesignSession("Cc1ccc(C)cc1", receptor, three_d=False)
-    with pytest.raises(ValueError, match="3D"):
-        session.nearest("methyl", "PHE")
 
 
 def test_residues_match_name_and_optional_number():
