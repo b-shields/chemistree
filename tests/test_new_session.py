@@ -1,12 +1,25 @@
 """The redesigned, id-addressed design session."""
 
+import pathlib
 from collections import Counter
 
+import numpy as np
 import pytest
 from rdkit import Chem
 
 from chemistree.fragmenter import fragment
 from chemistree.new_session import NewDesignSession
+
+DATA = pathlib.Path(__file__).parent / "data" / "abl1"
+
+
+def _abl1_session() -> NewDesignSession:
+    """A posed abl1 ligand with its receptor, for spatial tests."""
+    ligand = Chem.MolFromMolFile(str(DATA / "reference.sdf"), removeHs=False)
+    receptor = Chem.MolFromPDBFile(
+        str(DATA / "receptor.pdb"), removeHs=False, sanitize=False
+    )
+    return NewDesignSession(ligand, receptor)
 
 
 def _fragment_multiset(mol_or_tree) -> Counter:
@@ -182,6 +195,42 @@ def test_2d_only_grow_and_mutate_need_no_conformer():
     session.grow(ring, _aromatic_h_on_ring(session, ring), "[*]F")
     assert session.smiles() == Chem.CanonSmiles("Cc1ccccc1F")
     assert "**Atom Map:**" in session.describe()
+
+
+def test_distance_report_matches_ground_truth_minimum():
+    session = _abl1_session()
+    report = session.distance("ASP")
+    assert report.startswith("# Distances to ASP")
+    assert "## Details" in report
+
+    # The smallest distance printed must equal the true closest ligand-ASP approach.
+    residue = session.receptor.residue_atoms("ASP")
+    truth = min(
+        float(
+            np.sqrt(
+                ((residue - np.array(list(conf.GetAtomPosition(a.GetIdx())))) ** 2).sum(
+                    -1
+                )
+            ).min()
+        )
+        for node in session.tree.nodes
+        for conf in [node.current.mol.GetConformer()]
+        for a in node.current.mol.GetAtoms()
+        if a.GetAtomicNum() > 1
+    )
+    printed = min(
+        float(token)
+        for line in report.splitlines()
+        if line.startswith("| [")
+        for token in [line.split("|")[2].strip()]
+    )
+    assert printed == pytest.approx(truth, abs=0.01)
+
+
+def test_distance_requires_a_receptor():
+    session = NewDesignSession("Cc1ccccc1", three_d=True)
+    with pytest.raises(ValueError, match="receptor"):
+        session.distance("ASP")
 
 
 def test_edits_are_undoable():

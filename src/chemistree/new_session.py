@@ -11,9 +11,12 @@ what constructing from the edited molecule would give.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
+import numpy as np
 from rdkit import Chem
 
+from chemistree.annotations import annotate
 from chemistree.chem import prepare_molecule
 from chemistree.describe import describe_tree
 from chemistree.edits import grow_region, mutate_region, swap_region
@@ -149,6 +152,40 @@ class NewDesignSession:
         self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
         self._record()
 
+    def distance(self, residue_id: str) -> str:
+        """Report how close each group is to a receptor residue.
+
+        Args:
+            residue_id: A residue name ("PHE") or name with number ("PHE382").
+
+        Returns:
+            Markdown: a table of each group's minimum heavy-atom distance to the
+            residue, sorted closest first, then a per-atom details section.
+
+        Raises:
+            ValueError: If no receptor is loaded or the ligand lacks 3D coordinates.
+            NotFound: If no residue matches ``residue_id``.
+        """
+        if self.receptor is None:
+            raise ValueError("spatial distances need a receptor")
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("spatial distances need a ligand with 3D coordinates")
+        residue = self.receptor.residue_atoms(residue_id)
+        labels = {node.id: node for node in annotate(self.tree).nodes}
+        groups = []
+        for node in self.tree.nodes:
+            assert node.id is not None
+            annotation = labels[node.id]
+            groups.append(
+                _GroupDistances(
+                    node_id=node.id,
+                    label=annotation.name or annotation.classification,
+                    per_atom=_atom_distances(node.current.mol, residue),
+                )
+            )
+        groups.sort(key=lambda g: g.minimum)
+        return _distance_report(residue_id, groups)
+
     def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
         """Resplice an edited region into the tree, recording undo and history."""
         sub_nodes, undo = self.tree.resplice(node, region_mol)
@@ -174,6 +211,51 @@ class NewDesignSession:
             raise ValueError("nothing to undo")
         self._undo_stack.pop()()
         self._record()
+
+
+@dataclass(frozen=True)
+class _GroupDistances:
+    """One group's distances to a residue: a label and per-heavy-atom distances."""
+
+    node_id: int | None
+    label: str
+    per_atom: list[tuple[int, str, float]]
+
+    @property
+    def minimum(self) -> float:
+        """The closest heavy-atom approach of this group to the residue."""
+        return min(distance for _, _, distance in self.per_atom)
+
+
+def _atom_distances(mol: Chem.Mol, residue: np.ndarray) -> list[tuple[int, str, float]]:
+    """Each heavy atom's id, symbol, and minimum distance to the residue atoms."""
+    conf = mol.GetConformer()
+    out = []
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() <= 1:
+            continue
+        position = np.array(list(conf.GetAtomPosition(atom.GetIdx())))
+        closest = float(np.sqrt(((residue - position) ** 2).sum(-1)).min())
+        out.append((atom.GetIdx(), atom.GetSymbol(), closest))
+    return out
+
+
+def _distance_report(residue_id: str, groups: list[_GroupDistances]) -> str:
+    """Render the distance table and per-group details, groups already sorted."""
+    lines = [
+        f"# Distances to {residue_id}",
+        "",
+        "| group | min distance (A) |",
+        "|---|---|",
+    ]
+    for group in groups:
+        lines.append(f"| [{group.node_id}] {group.label} | {group.minimum:.2f} |")
+    lines += ["", "## Details"]
+    for group in groups:
+        lines.append(f"### [{group.node_id}] {group.label}")
+        for idx, symbol, distance in group.per_atom:
+            lines.append(f"- atom {idx} ({symbol}): {distance:.2f}")
+    return "\n".join(lines)
 
 
 _ELEMENT_NAMES = {

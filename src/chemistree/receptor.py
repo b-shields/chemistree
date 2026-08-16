@@ -152,6 +152,25 @@ class Receptor:
             raise NotFound(f"no {residue} within {within:g} A of the candidates")
         return best
 
+    def residue_atoms(self, spec: str) -> np.ndarray:
+        """Coordinates of every atom of the residues matching a spec.
+
+        Args:
+            spec: A residue name ("PHE", every phenylalanine) or a name with a
+                sequence number ("PHE382", the one residue).
+
+        Returns:
+            An (N, 3) array of the matching residues' atom coordinates.
+
+        Raises:
+            NotFound: If no residue matches the spec.
+        """
+        targets = self.residues(spec)
+        if not targets:
+            raise NotFound(f"no {spec} residue in the receptor")
+        atoms = tuple(idx for residue in targets for idx in residue.atoms)
+        return self._positions(atoms)
+
     def pocket(self, ligand: Chem.Mol, within: float = 8.0) -> list[Residue]:
         """Residues with any atom within a distance of the ligand.
 
