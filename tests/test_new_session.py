@@ -40,21 +40,32 @@ def _built_from(session) -> Counter:
     return _fragment_multiset(session.molecule())
 
 
-def test_describe_has_summary_header_and_a_section_per_group():
+def test_describe_is_a_compact_overview_without_per_group_detail():
     session = NewDesignSession("Cc1ccc(N)cc1", three_d=False)
     text = session.describe()
     assert text.startswith("# Group Summary")
-    assert "position_id" in text  # the legend
-    assert text.count("## [") == len(session.tree.nodes)
+    assert text.count("\n- [") == len(session.tree.nodes)  # one bullet per group
+    # The heavy per-group detail is pulled on demand, not dumped here.
+    assert "**Atom Map:**" not in text
+    assert "**Topology:**" not in text
 
 
-def test_describe_ring_group_has_rings_section_acyclic_does_not():
+def test_describe_group_shows_atom_map_topology_and_rings():
     session = NewDesignSession("Cc1ccccc1", three_d=False)
-    sections = session.describe().split("\n## ")
-    ring = next(s for s in sections if s.split("`")[0].endswith("phenyl "))
-    methyl = next(s for s in sections if s.split("`")[0].endswith("methyl "))
-    assert "**Rings:**" in ring
-    assert "**Rings:**" not in methyl
+    ring = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+    )
+    methyl = next(
+        n.id
+        for n in session.tree.nodes
+        if sum(1 for a in n.current.mol.GetAtoms() if a.GetAtomicNum() > 1) == 1
+    )
+    ring_detail = session.describe_group(ring)
+    assert "**Atom Map:**" in ring_detail
+    assert "**Topology:**" in ring_detail
+    assert "**Rings:**" in ring_detail
+    assert "position_id" in ring_detail  # the legend lives with the detail
+    assert "**Rings:**" not in session.describe_group(methyl)  # acyclic
 
 
 def test_smiles_history_records_construction():
@@ -194,7 +205,7 @@ def test_2d_only_grow_and_mutate_need_no_conformer():
     )
     session.grow(ring, _aromatic_h_on_ring(session, ring), "[*]F")
     assert session.smiles() == Chem.CanonSmiles("Cc1ccccc1F")
-    assert "**Atom Map:**" in session.describe()
+    assert "**Atom Map:**" in session.describe_group(ring)
 
 
 def test_distance_report_matches_ground_truth_minimum():

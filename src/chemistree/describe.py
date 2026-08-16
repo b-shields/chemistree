@@ -1,9 +1,13 @@
-"""Agent-facing description of a fragment tree.
+"""Agent-facing description of a fragment tree, in two tiers.
 
-``describe_tree`` renders a compact, information-rich markdown map of every group:
-a header line, an **Atom Map** (atom-mapped SMILES whose map numbers are the exact
-rdkit atom ids), a **Rings** section (natural-language ring membership), and a
-**Topology** matrix (pairwise bond distances over the heavy-atom + port skeleton).
+``describe_tree`` renders a compact overview: one line per group with its id,
+name, fragment SMILES, formula, role, and inter-group connections. ``describe_group``
+renders the heavy per-group detail on demand — an **Atom Map** (atom-mapped SMILES
+whose map numbers are the exact rdkit atom ids), a **Rings** section (natural-language
+ring membership), and a **Topology** matrix (pairwise bond distances over the
+heavy-atom + port skeleton). Splitting them keeps a large molecule from flooding the
+context: the agent orients on the overview, then pulls detail for the one group it
+edits.
 
 Two id namespaces are kept visually distinct: ``:k`` is an atom id (a grow/mutate
 position), ``[n*]`` is a port (a connection between groups).
@@ -23,9 +27,13 @@ if TYPE_CHECKING:
 
 Labels = dict[int, NodeAnnotation]
 
-_LEGEND = (
-    "Notation: `:k` = atom id (use as grow/mutate position_id); "
-    "`[n*]` = port (connects groups).\n"
+_OVERVIEW_NOTE = (
+    "Call describe_group(id) for a group's atom positions, rings, and topology."
+)
+
+_GROUP_LEGEND = (
+    "Atom ids are `:k` (use as grow/mutate position_id); `[n*]` = port "
+    "(connects groups).\n"
     "Topology cell = bonds between the row and column atom; diagonal is `.`."
 )
 
@@ -33,31 +41,51 @@ _MAP_ID = re.compile(r":(\d+)]")
 
 
 def describe_tree(tree: FragmentTree) -> str:
-    """Render the whole tree: a header, the legend, then one section per group.
+    """Render the compact group inventory: one line per group.
+
+    This is the overview the agent reads to pick a group. It lists each group's
+    id, name, fragment SMILES, formula, role, and inter-group connections, but not
+    the per-group atom positions, rings, or topology — those are pulled on demand
+    with :func:`describe_group`, so a large molecule does not flood the context.
 
     Args:
         tree: The tree to describe.
 
     Returns:
-        A markdown document the agent reads to address groups and atom positions.
+        A markdown overview of every group.
     """
     nodes = annotate(tree).nodes
     labels = {node.id: node for node in nodes}
-    parts = [f"# Group Summary\n{_LEGEND}"]
-    for node in nodes:
-        parts.append(_group_section(node, tree.node(node.id).current.mol, labels))
-    return "\n\n".join(parts)
+    lines = [f"# Group Summary\n{_OVERVIEW_NOTE}\n"]
+    lines += [f"- {_header_line(node, labels)}" for node in nodes]
+    return "\n".join(lines)
 
 
-def _group_section(node: NodeAnnotation, mol: Chem.Mol, labels: Labels) -> str:
-    """Render one group's ``##`` header, Atom Map, optional Rings, and Topology."""
-    header = _header_line(node, labels)
-    body = [f"**Atom Map:** `{atom_map(mol)}`"]
+def describe_group(tree: FragmentTree, group_id: int) -> str:
+    """Render one group's atom positions, rings, and topology.
+
+    Args:
+        tree: The tree the group belongs to.
+        group_id: Id of the group to detail.
+
+    Returns:
+        A markdown section: the group header and legend, its Atom Map, its Rings
+        (when cyclic), and its Topology matrix.
+    """
+    labels = {node.id: node for node in annotate(tree).nodes}
+    node = labels[group_id]
+    mol = tree.node(group_id).current.mol
+    body = [
+        f"## {_header_line(node, labels)}",
+        _GROUP_LEGEND,
+        "",
+        f"**Atom Map:** `{atom_map(mol)}`",
+    ]
     rings = rings_section(mol)
     if rings:
         body.append(rings)
     body.append(f"**Topology:**\n```\n{topology_matrix(mol)}\n```")
-    return f"## {header}\n" + "\n".join(body)
+    return "\n".join(body)
 
 
 def _header_line(node: NodeAnnotation, labels: Labels) -> str:

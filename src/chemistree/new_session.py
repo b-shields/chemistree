@@ -18,7 +18,7 @@ from rdkit import Chem
 
 from chemistree.annotations import annotate
 from chemistree.chem import prepare_molecule
-from chemistree.describe import describe_tree
+from chemistree.describe import describe_group, describe_tree
 from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
@@ -66,8 +66,23 @@ class NewDesignSession:
         self.smiles_history.append(self.smiles())
 
     def describe(self) -> str:
-        """A readable markdown map of the current fragments and atom positions."""
+        """A compact markdown inventory of the current groups.
+
+        Lists each group's id, name, fragment, role, and connections. Call
+        :meth:`describe_group` for a group's atom positions, rings, and topology.
+        """
         return describe_tree(self.tree)
+
+    def describe_group(self, group_id: int) -> str:
+        """The atom positions, rings, and topology of one group.
+
+        Args:
+            group_id: Id of the group to detail.
+
+        Returns:
+            A markdown section with the group's Atom Map, Rings, and Topology.
+        """
+        return describe_group(self.tree, group_id)
 
     def molecule(self) -> Chem.Mol:
         """The current molecule, reconstructed from the tree."""
