@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -124,6 +125,101 @@ class FragmentTree:
             elif edge.node_b is node:
                 out.append((edge, edge.node_a))
         return out
+
+    def resplice(
+        self, node: FragmentNode, region_mol: Chem.Mol
+    ) -> tuple[list[FragmentNode], Callable[[], None]]:
+        """Replace a node with the fragmentation of its edited region.
+
+        ``region_mol`` is the node's atoms after an edit, still carrying the node's
+        existing external-port dummies. It is re-fragmented with the same
+        ``should_break`` policy that construction uses, so the tree stays identical
+        (up to node numbering) to fragmenting the whole edited molecule: a new node
+        appears only where the policy breaks a bond, and the group merges otherwise.
+        External ports reconnect to the neighbors they had; new internal ports pair
+        the resulting sub-fragments. The largest sub-fragment keeps ``node``'s id.
+
+        Args:
+            node: The node whose region was edited.
+            region_mol: The edited region, with the node's external-port dummies.
+
+        Returns:
+            The new sub-nodes and an undo closure that restores the prior tree.
+        """
+        from chemistree.fragmenter import should_break
+
+        before = (list(self.nodes), list(self.edges), dict(self._by_id), self._next_id)
+        external = {edge.label: other for edge, other in self.neighbors(node)}
+
+        breakable = [
+            b.GetIdx() for b in region_mol.GetBonds() if should_break(region_mol, b)
+        ]
+        if breakable:
+            labels = list(
+                range(self._max_label() + 1, self._max_label() + 1 + len(breakable))
+            )
+            broken = Chem.FragmentOnBonds(
+                region_mol,
+                breakable,
+                addDummies=True,
+                dummyLabels=[(la, la) for la in labels],
+            )
+            pieces = list(Chem.GetMolFrags(broken, asMols=True, sanitizeFrags=True))
+        else:
+            pieces = [region_mol]
+
+        sub_nodes = [FragmentNode(Fragment(p)) for p in pieces]
+        self._replace_node(node, sub_nodes)
+        self._rewire(sub_nodes, external)
+
+        def undo() -> None:
+            """Restore the tree to its state before this resplice."""
+            self.nodes, self.edges, self._by_id, self._next_id = (
+                before[0],
+                before[1],
+                before[2],
+                before[3],
+            )
+
+        return sub_nodes, undo
+
+    def _replace_node(self, node: FragmentNode, sub_nodes: list[FragmentNode]) -> None:
+        """Swap ``node`` out for its sub-nodes; the largest inherits its id."""
+        self.nodes = [n for n in self.nodes if n is not node]
+        self.edges = [
+            e for e in self.edges if e.node_a is not node and e.node_b is not node
+        ]
+        if node.id is not None:
+            self._by_id.pop(node.id, None)
+        core = max(sub_nodes, key=lambda n: _heavy_count(n.current.mol))
+        for sub in sub_nodes:
+            if sub is core and node.id is not None:
+                sub.id = node.id
+                self._by_id[node.id] = sub
+            else:
+                self._register(sub)
+            self.nodes.append(sub)
+
+    def _rewire(
+        self, sub_nodes: list[FragmentNode], external: dict[int, FragmentNode]
+    ) -> None:
+        """Add edges: external labels to old neighbors, new labels between sub-nodes."""
+        carriers: dict[int, list[FragmentNode]] = defaultdict(list)
+        for sub in sub_nodes:
+            for port in sub.current.ports:
+                carriers[port.label].append(sub)
+        for label, subs in carriers.items():
+            if label in external:
+                self.edges.append(
+                    Edge(label, subs[0], external[label], Chem.BondType.SINGLE)
+                )
+            else:
+                self.edges.append(Edge(label, subs[0], subs[1], Chem.BondType.SINGLE))
+
+    def _max_label(self) -> int:
+        """The largest port label anywhere in the tree, or 0 if there are none."""
+        labels = [port.label for n in self.nodes for port in n.current.ports]
+        return max(labels, default=0)
 
     def leaves(self) -> list[FragmentNode]:
         """Nodes with at most one edge."""
@@ -267,6 +363,11 @@ class FragmentTree:
         mol = rw.GetMol()
         Chem.SanitizeMol(mol)
         return mol
+
+
+def _heavy_count(mol: Chem.Mol) -> int:
+    """Number of heavy (non-hydrogen, non-dummy) atoms in a molecule."""
+    return sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1)
 
 
 def _cap_port(node: FragmentNode, label: int) -> None:

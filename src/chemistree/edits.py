@@ -36,12 +36,99 @@ def swap(node: FragmentNode, group: str | Chem.Mol) -> None:
         ValueError: If the group cannot be parsed, has no ports, or its port
             labels do not match the fragment's.
     """
-    old = node.current
+    node.push(Fragment(swap_region(node.current, group)))
+
+
+def swap_region(old: Fragment, group: str | Chem.Mol) -> Chem.Mol:
+    """Build the replacement mol for a swap, placed onto the old fragment's frame.
+
+    This is ``swap`` without the tree side effect: it parses the group, matches its
+    ports to the old fragment's labels, and (when the old fragment has 3D coords)
+    overlays it onto the retained frame. The caller decides how to graft the result
+    into the tree.
+
+    Args:
+        old: Fragment being replaced, whose ports and frame are preserved.
+        group: New group as a SMILES string or Mol, with one dummy per port.
+
+    Returns:
+        The new group mol, port-labeled and (when applicable) placed in 3D.
+    """
     new = _parse_group(group)
     _assign_port_labels(old, new)
     if old.mol.GetNumConformers():
         new = _place(old, new)
-    node.push(Fragment(new))
+    return new
+
+
+def grow_region(old: Fragment, hydrogen: int, group: str | Chem.Mol) -> Chem.Mol:
+    """Build the edited region for growing a group where a hydrogen was.
+
+    The hydrogen at ``hydrogen`` is removed and the group is bonded to its heavy
+    parent, so the group takes that hydrogen's place; the old fragment's ports and
+    frame are preserved. The caller re-fragments the result, so whether the group
+    becomes its own node or merges follows the same policy as construction.
+
+    Args:
+        old: Fragment being grown, with explicit hydrogens.
+        hydrogen: Atom id of the hydrogen to replace (its parent is the grow site).
+        group: New group as a SMILES string or Mol, with one dummy attachment.
+
+    Returns:
+        The augmented region mol, placed in 3D when the fragment has coords.
+
+    Raises:
+        ValueError: If ``hydrogen`` is not a hydrogen atom, or the group has no port.
+    """
+    atom = old.mol.GetAtomWithIdx(hydrogen)
+    if atom.GetAtomicNum() != 1:
+        raise ValueError(f"atom {hydrogen} is not a hydrogen; grow replaces a hydrogen")
+    heavy = atom.GetNeighbors()[0].GetIdx()
+    augmented = _attach_at_hydrogen(old.mol, hydrogen, heavy, _parse_group(group))
+    if old.mol.GetNumConformers():
+        augmented = _place(old, augmented)
+    return augmented
+
+
+def mutate_region(old: Fragment, atom: int, element: int) -> Chem.Mol:
+    """Build the edited region for mutating one heavy atom's element.
+
+    Args:
+        old: Fragment being edited.
+        atom: Heavy-atom id whose element changes.
+        element: Atomic number of the new element.
+
+    Returns:
+        The mutated region mol, with explicit hydrogens, placed in 3D when the
+        fragment has coords.
+
+    Raises:
+        ValueError: If the change leaves an invalid valence.
+    """
+    new = _mutated_mol(old.mol, atom, element)
+    if old.mol.GetNumConformers():
+        return _place(old, new)
+    return Chem.AddHs(new)
+
+
+def _attach_at_hydrogen(
+    scaffold: Chem.Mol, hydrogen: int, heavy: int, group: Chem.Mol
+) -> Chem.Mol:
+    """Bond a group's anchor to ``heavy``, removing the specific ``hydrogen`` there."""
+    rw = Chem.RWMol(Chem.CombineMols(scaffold, group))
+    offset = scaffold.GetNumAtoms()
+    g_dummy = next(
+        a.GetIdx()
+        for a in rw.GetAtoms()
+        if a.GetIdx() >= offset and a.GetAtomicNum() == 0
+    )
+    g_anchor = rw.GetAtomWithIdx(g_dummy).GetNeighbors()[0].GetIdx()
+    rw.AddBond(heavy, g_anchor, Chem.BondType.SINGLE)
+    for idx in sorted([g_dummy, hydrogen], reverse=True):
+        rw.RemoveAtom(idx)
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+    return mol
 
 
 def mutate_atom(node: FragmentNode, atom: int, element: int) -> None:
@@ -79,6 +166,9 @@ def _mutated_mol(mol: Chem.Mol, atom: int, element: int) -> Chem.Mol:
     """
     heavy = Chem.RWMol(Chem.RemoveHs(mol))
     target = heavy.GetAtomWithIdx(atom)
+    was_aromatic = target.GetIsAromatic()
+    old_symbol = target.GetSymbol()
+    new_symbol = Chem.GetPeriodicTable().GetElementSymbol(element)
     target.SetAtomicNum(element)
     target.SetFormalCharge(0)
     target.SetNumExplicitHs(0)
@@ -86,8 +176,10 @@ def _mutated_mol(mol: Chem.Mol, atom: int, element: int) -> Chem.Mol:
     try:
         Chem.SanitizeMol(heavy)
     except rdchem.MolSanitizeException as error:
+        ring = "aromatic " if was_aromatic else ""
         raise ValueError(
-            f"cannot mutate atom {atom} to element {element}: {error}"
+            f"cannot mutate {ring}{old_symbol} at atom {atom} to {new_symbol}: "
+            f"the result has an invalid valence ({error})"
         ) from error
     return heavy.GetMol()
 
