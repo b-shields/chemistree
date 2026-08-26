@@ -14,10 +14,12 @@ def run_command(session: DesignSession, text: str) -> str:
         grow <id> <position_id> <group>
         mutate <id> <position_id> <element>
         remove <id>
+        rotate <id> <degrees> [window]
         undo
         group <id>
         distance <residue>
         contacts [dist_cutoff]
+        clashes
 
     Ids come from ``describe`` (the group overview); atom position ids come from
     ``group <id>`` (``describe_group``).
@@ -51,6 +53,9 @@ def run_command(session: DesignSession, text: str) -> str:
     if command == "remove":
         session.remove(int(args[0]))
         return f"removed group {args[0]}"
+    if command == "rotate":
+        window = float(args[2]) if len(args) > 2 else 60.0
+        return session.rotate(int(args[0]), float(args[1]), window=window)
     if command == "undo":
         session.undo()
         return "reverted the last edit"
@@ -60,4 +65,6 @@ def run_command(session: DesignSession, text: str) -> str:
         return session.distance(args[0])
     if command == "contacts":
         return session.contacts(float(args[0])) if args else session.contacts()
+    if command == "clashes":
+        return session.clashes()
     raise ValueError(f"unknown command: {command!r}")

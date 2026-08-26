@@ -90,6 +90,19 @@ def test_command_contacts_reports_site_contacts():
     assert report.startswith("# Binding-site contacts (within 4.5 A)")
 
 
+def test_command_rotate_returns_a_report():
+    session = DesignSession("CCc1ccccc1", three_d=True)  # ethylbenzene
+    ethyl = _node_id(session, lambda m: _heavy(m) == 2)
+    report = run_command(session, f"rotate {ethyl} 120")
+    assert report.startswith("Rotated")
+    assert "Clash score" in report
+
+
+def test_command_clashes_returns_a_report():
+    session = DesignSession("Cc1ccccc1", three_d=True)
+    assert "Clashes" in run_command(session, "clashes")
+
+
 def test_command_unknown_raises():
     session = DesignSession("Cc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="unknown command"):

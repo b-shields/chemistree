@@ -204,5 +204,35 @@ def contacts(dist_cutoff: float = 4.5) -> str:
     return _command(f"contacts {dist_cutoff}")
 
 
+@mcp.tool
+def rotate(group_id: int, degrees: float, window: float = 60.0) -> str:
+    """Rotate a group about its attachment bond to relieve a clash.
+
+    The group turns about the single bond joining it to the rest of the molecule,
+    carrying its own substituents. Every whole-degree turn is scored for steric
+    clash; the least-clashing turn within ``window`` of the request is applied. Use
+    this after ``clashes`` reports a strained group. The result reports the applied
+    turn and the clash score before and after.
+
+    Args:
+        group_id: Group to rotate (from ``describe``).
+        degrees: Requested turn, in degrees (e.g. 120).
+        window: How far, in degrees, the search may stray from ``degrees`` to
+            reduce the clash.
+    """
+    return _command(f"rotate {group_id} {degrees} {window}", with_state=_PRIME)
+
+
+@mcp.tool
+def clashes() -> str:
+    """List steric clashes in the current pose, worst first.
+
+    Reports group-group overlaps and, when a receptor is loaded, each group that
+    overlaps a residue. Call this after an edit to check whether a new or moved
+    group clashes; if it does, offer to ``rotate`` that group to relieve it.
+    """
+    return _command("clashes")
+
+
 if __name__ == "__main__":
     mcp.run()

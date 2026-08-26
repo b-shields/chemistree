@@ -83,7 +83,12 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
         f"grow or mutate, call describe_group(id) to get the atom position ids. "
         f"When a request names a residue (near/closest to it), call distance to see "
         f"which group is closest, or contacts to map the whole binding site, before "
-        f"editing.\n\n"
+        f"editing. After adding or changing a group, call clashes to check the new "
+        f"pose; if a group clashes with another group or the protein, tell the user "
+        f"and offer to rotate it to relieve the clash, and rotate only once they "
+        f"agree (rotate turns a group about its attachment bond, carrying its "
+        f"substituents, and settles it to the least-clashing angle near what you "
+        f"ask).\n\n"
         f"The ids, atom positions, and tables the tools return are your private "
         f"scaffolding for addressing atoms — never repeat them to the user. Talk the "
         f"way a chemist talks: name each group by what it is (the dichlorophenyl, "
@@ -99,14 +104,15 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
 
 
 _SYSTEM_PROMPT = _system_prompt(
-    "describe, describe_group, smiles, swap, grow, mutate, remove, undo, distance, "
-    "contacts"
+    "describe, describe_group, smiles, swap, grow, mutate, remove, rotate, undo, "
+    "distance, contacts, clashes"
 )
 # The primed mode seeds the group listing up front and refreshes it after each edit,
 # so the describe overview is blocked; the agent acts on the given ids and calls
 # describe_group for atom positions.
 _PRIMED_PROMPT = _system_prompt(
-    "describe_group, smiles, swap, grow, mutate, remove, undo, distance, contacts",
+    "describe_group, smiles, swap, grow, mutate, remove, rotate, undo, distance, "
+    "contacts, clashes",
     primed_note=(
         " You are given the current group listing, refreshed after every edit; use "
         "those ids directly and call describe_group(id) for atom positions."
@@ -150,9 +156,11 @@ _TOOL_PHRASES = {
     "grow": "growing a group",
     "mutate": "mutating an atom",
     "remove": "removing a group",
+    "rotate": "rotating a group",
     "undo": "undoing the last edit",
     "distance": "measuring distances",
     "contacts": "mapping the binding site",
+    "clashes": "checking for clashes",
     "describe": "reading the molecule",
     "describe_group": "reading a group",
     "smiles": "reading the molecule",
