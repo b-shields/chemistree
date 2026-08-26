@@ -200,6 +200,44 @@ def test_grow_in_3d_keeps_bond_lengths_sane():
     assert min(ch) > 1.0
 
 
+def test_grow_on_a_substituted_ring_keeps_the_ring_intact():
+    # Regression: growing on a ring that already carries substituents must not
+    # re-embed and warp the scaffold. The bug pretzeled the ring, stretching its
+    # bonds to ~2.4 A and the new bond to ~4.2 A.
+    session = DesignSession("Clc1ccccc1", three_d=True)  # chlorobenzene
+    ring = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+    )
+    before = _ring_bond_lengths(session.tree.node(ring).current.mol)
+    session.grow(ring, _aromatic_h_on_ring(session, ring), "[*]CO")  # methyl alcohol
+
+    mol = session.molecule()
+    conf = mol.GetConformer()
+    heavy = [
+        conf.GetAtomPosition(b.GetBeginAtomIdx()).Distance(
+            conf.GetAtomPosition(b.GetEndAtomIdx())
+        )
+        for b in mol.GetBonds()
+        if b.GetBeginAtom().GetAtomicNum() > 1 and b.GetEndAtom().GetAtomicNum() > 1
+    ]
+    assert max(heavy) < 1.9  # no over-long bond anywhere (C-Cl is ~1.74)
+    # The aromatic ring keeps the geometry it had before the grow.
+    after = _ring_bond_lengths(session.tree.node(ring).current.mol)
+    assert after == pytest.approx(before, abs=1e-3)
+
+
+def _ring_bond_lengths(mol: Chem.Mol) -> list[float]:
+    """Sorted lengths of the aromatic ring bonds, for a warp check."""
+    conf = mol.GetConformer()
+    return sorted(
+        conf.GetAtomPosition(b.GetBeginAtomIdx()).Distance(
+            conf.GetAtomPosition(b.GetEndAtomIdx())
+        )
+        for b in mol.GetBonds()
+        if b.GetBeginAtom().GetIsAromatic() and b.GetEndAtom().GetIsAromatic()
+    )
+
+
 def test_2d_only_grow_and_mutate_need_no_conformer():
     session = DesignSession("Cc1ccccc1", three_d=False)
     ring = next(

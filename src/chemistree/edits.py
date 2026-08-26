@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdchem, rdFMCS, rdMolAlign
+from rdkit.Geometry import Point3D
 
 from chemistree.fragment import Fragment
 from chemistree.geometry import chiral_volume
@@ -84,10 +86,132 @@ def grow_region(old: Fragment, hydrogen: int, group: str | Chem.Mol) -> Chem.Mol
     if atom.GetAtomicNum() != 1:
         raise ValueError(f"atom {hydrogen} is not a hydrogen; grow replaces a hydrogen")
     heavy = atom.GetNeighbors()[0].GetIdx()
-    augmented = _attach_at_hydrogen(old.mol, hydrogen, heavy, _parse_group(group))
     if old.mol.GetNumConformers():
-        augmented = _place(old, augmented)
+        return _grow_3d(old.mol, hydrogen, heavy, _parse_group(group))
+    augmented, _ = _attach_at_hydrogen(old.mol, hydrogen, heavy, _parse_group(group))
     return augmented
+
+
+def _grow_3d(
+    scaffold: Chem.Mol, hydrogen: int, heavy: int, group: Chem.Mol
+) -> Chem.Mol:
+    """Attach a group where a hydrogen was, keeping the scaffold's frame intact.
+
+    The scaffold already has good coordinates, so they are never re-embedded. The
+    group is embedded on its own, moved so its anchor takes the replaced hydrogen's
+    place and its bond points along the old heavy-hydrogen direction, then bonded
+    in. Only the group's atoms relax under UFF; the whole scaffold is held fixed, so
+    the ring it grows from cannot warp.
+
+    Args:
+        scaffold: The old fragment, with explicit hydrogens and a conformer.
+        hydrogen: Index of the hydrogen being replaced.
+        heavy: Index of the grow-site heavy atom (the hydrogen's parent).
+        group: New group with one dummy attachment (no conformer needed).
+
+    Returns:
+        The augmented region mol with the group placed and relaxed in 3D.
+    """
+    placed = _oriented_group(scaffold, hydrogen, heavy, group)
+    dummy = next(a.GetIdx() for a in placed.GetAtoms() if a.GetAtomicNum() == 0)
+    anchor = placed.GetAtomWithIdx(dummy).GetNeighbors()[0].GetIdx()
+    for atom in placed.GetAtoms():
+        atom.SetBoolProp("_grown", True)
+
+    offset = scaffold.GetNumAtoms()
+    rw = Chem.RWMol(Chem.CombineMols(scaffold, placed))
+    rw.AddBond(heavy, offset + anchor, Chem.BondType.SINGLE)
+    for idx in sorted([offset + dummy, hydrogen], reverse=True):
+        rw.RemoveAtom(idx)
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+
+    held = [a.GetIdx() for a in mol.GetAtoms() if not a.HasProp("_grown")]
+    _relax(mol, held)
+    for atom in mol.GetAtoms():
+        atom.ClearProp("_grown")
+    return mol
+
+
+def _oriented_group(
+    scaffold: Chem.Mol, hydrogen: int, heavy: int, group: Chem.Mol
+) -> Chem.Mol:
+    """Embed a group and place its anchor where the replaced hydrogen sat.
+
+    The group is rigidly moved so its anchor lands on the hydrogen's position and
+    the anchor-to-dummy direction points back at ``heavy``, so the new bond lies
+    along the old heavy-hydrogen bond. The bond length is left for UFF to refine.
+
+    Args:
+        scaffold: The old fragment, with a conformer.
+        hydrogen: Index (in ``scaffold``) of the hydrogen being replaced.
+        heavy: Index (in ``scaffold``) of the grow-site heavy atom.
+        group: New group with one dummy attachment.
+
+    Returns:
+        The embedded group mol, transformed into the scaffold's frame.
+    """
+    g = Chem.AddHs(group)
+    AllChem.EmbedMolecule(g, randomSeed=_EMBED_SEED)
+    dummy = next(a.GetIdx() for a in g.GetAtoms() if a.GetAtomicNum() == 0)
+    anchor = g.GetAtomWithIdx(dummy).GetNeighbors()[0].GetIdx()
+
+    conf = g.GetConformer()
+    coords = np.array([list(conf.GetAtomPosition(i)) for i in range(g.GetNumAtoms())])
+    scaffold_conf = scaffold.GetConformer()
+    heavy_pos = np.array(list(scaffold_conf.GetAtomPosition(heavy)))
+    h_pos = np.array(list(scaffold_conf.GetAtomPosition(hydrogen)))
+
+    # Rotate so the anchor-to-dummy direction points from the hydrogen toward heavy,
+    # then translate the anchor onto the hydrogen's position.
+    src = coords[dummy] - coords[anchor]
+    dst = heavy_pos - h_pos
+    rotation = _rotation_between(src, dst)
+    coords = (coords - coords[anchor]) @ rotation.T + h_pos
+
+    for i in range(g.GetNumAtoms()):
+        conf.SetAtomPosition(i, Point3D(*coords[i]))
+    return g
+
+
+def _rotation_between(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """A 3x3 rotation matrix taking the direction of ``src`` onto that of ``dst``.
+
+    Uses Rodrigues' formula about the axis perpendicular to both vectors. Parallel
+    and antiparallel inputs are handled without dividing by zero.
+
+    Args:
+        src: Source direction vector (need not be unit length).
+        dst: Target direction vector (need not be unit length).
+
+    Returns:
+        The rotation matrix ``R`` with ``R @ unit(src) == unit(dst)``.
+    """
+    a = src / np.linalg.norm(src)
+    b = dst / np.linalg.norm(dst)
+    axis = np.cross(a, b)
+    sine = float(np.linalg.norm(axis))
+    cosine = float(np.dot(a, b))
+    if sine < 1e-8:
+        if cosine > 0:
+            return np.eye(3)
+        # Antiparallel: rotate 180 degrees about any axis perpendicular to ``a``.
+        perp = np.cross(a, [1.0, 0.0, 0.0])
+        if np.linalg.norm(perp) < 1e-8:
+            perp = np.cross(a, [0.0, 1.0, 0.0])
+        perp /= np.linalg.norm(perp)
+        flip: np.ndarray = 2.0 * np.outer(perp, perp) - np.eye(3)
+        return flip
+    axis /= sine
+    k = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ]
+    )
+    rotation: np.ndarray = np.eye(3) + sine * k + (1.0 - cosine) * (k @ k)
+    return rotation
 
 
 def mutate_region(old: Fragment, atom: int, element: int) -> Chem.Mol:
@@ -113,8 +237,13 @@ def mutate_region(old: Fragment, atom: int, element: int) -> Chem.Mol:
 
 def _attach_at_hydrogen(
     scaffold: Chem.Mol, hydrogen: int, heavy: int, group: Chem.Mol
-) -> Chem.Mol:
-    """Bond a group's anchor to ``heavy``, removing the specific ``hydrogen`` there."""
+) -> tuple[Chem.Mol, int]:
+    """Bond a group's anchor to ``heavy``, removing the specific ``hydrogen`` there.
+
+    Returns:
+        The augmented mol and the index (in it) of the group's anchor atom — the
+        atom now bonded to ``heavy``, so a caller can seed it at the freed hydrogen.
+    """
     rw = Chem.RWMol(Chem.CombineMols(scaffold, group))
     offset = scaffold.GetNumAtoms()
     g_dummy = next(
@@ -124,11 +253,14 @@ def _attach_at_hydrogen(
     )
     g_anchor = rw.GetAtomWithIdx(g_dummy).GetNeighbors()[0].GetIdx()
     rw.AddBond(heavy, g_anchor, Chem.BondType.SINGLE)
-    for idx in sorted([g_dummy, hydrogen], reverse=True):
+    removed = [g_dummy, hydrogen]
+    for idx in sorted(removed, reverse=True):
         rw.RemoveAtom(idx)
     mol = rw.GetMol()
     Chem.SanitizeMol(mol)
-    return mol
+    # Removing atoms below the anchor shifts its index down by that many.
+    anchor = g_anchor - sum(1 for idx in removed if idx < g_anchor)
+    return mol, anchor
 
 
 def mutate_atom(node: FragmentNode, atom: int, element: int) -> None:
@@ -236,7 +368,15 @@ def _assign_port_labels(old: Fragment, new: Chem.Mol) -> None:
 
 
 def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
-    """Embed the new group and overlay it onto the old fragment's frame."""
+    """Embed the new group and overlay it onto the old fragment's frame.
+
+    Args:
+        old: The fragment being replaced, with a 3D conformer.
+        new: The new region to place.
+
+    Returns:
+        The new region with a conformer overlaid on the retained frame.
+    """
     new = Chem.AddHs(new)
     AllChem.EmbedMolecule(new, randomSeed=_EMBED_SEED)
 
@@ -256,7 +396,7 @@ def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     for ni, oi in pinned.items():
         conf.SetAtomPosition(ni, old_conf.GetAtomPosition(oi))
 
-    _relax(new, pinned)
+    _relax(new, set(pinned))
     return new
 
 
