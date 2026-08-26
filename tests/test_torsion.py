@@ -3,8 +3,14 @@
 import math
 
 import numpy as np
+import pytest
 
-from chemistree.torsion import axis_matrix, clash_score, scan_torsion
+from chemistree.torsion import (
+    axis_matrix,
+    clash_score,
+    scan_torsion,
+    worst_overlap,
+)
 
 
 def _apply(matrix: np.ndarray, point: np.ndarray) -> np.ndarray:
@@ -66,6 +72,22 @@ def test_scan_torsion_finds_a_lower_clash_near_the_target():
     assert result.window_best[1] < result.current  # the search relieves the clash
     lo, hi = 150, 190
     assert lo <= result.window_best[0] <= hi  # stays near the requested angle
+
+
+def test_worst_overlap_finds_the_tightest_pair():
+    a_xyz = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
+    b_xyz = np.array([[9.5, 0.0, 0.0]])  # overlaps the second a-atom by 0.5 (r=1.6)
+    overlap, i, j = worst_overlap(
+        a_xyz, np.array([1.6, 1.6]), b_xyz, np.array([1.6]), tol=0.0
+    )
+    assert (i, j) == (1, 0)
+    assert overlap == pytest.approx(3.2 - 0.5)
+
+
+def test_worst_overlap_is_empty_safe():
+    assert worst_overlap(
+        np.empty((0, 3)), np.empty(0), np.array([[0.0, 0.0, 0.0]]), np.array([1.6])
+    ) == (0.0, -1, -1)
 
 
 def test_scan_torsion_honors_the_target_when_nothing_clashes():

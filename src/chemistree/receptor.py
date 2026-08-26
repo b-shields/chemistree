@@ -192,6 +192,26 @@ class Receptor:
             self._heavy = (positions[heavy], radii)
         return self._heavy
 
+    def heavy_atom_labels(self) -> list[str]:
+        """A residue label ("ASP149") for each heavy atom, aligned to heavy_atoms.
+
+        Returns:
+            One ``NAME + number`` label per heavy atom, in ``heavy_atoms`` order,
+            so a clash on a receptor atom can name the residue it belongs to.
+        """
+        labels = []
+        for atom in self.mol.GetAtoms():
+            if atom.GetAtomicNum() <= 1:
+                continue
+            info = atom.GetPDBResidueInfo()
+            if info is None:
+                labels.append("?")
+            else:
+                labels.append(
+                    f"{info.GetResidueName().strip()}{info.GetResidueNumber()}"
+                )
+        return labels
+
     def residue_positions(self, residue: Residue) -> np.ndarray:
         """Coordinates of one residue's atoms as an (N, 3) array.
 

@@ -77,6 +77,37 @@ def clash_score(
     return float(np.maximum(contact - dist, 0.0).sum())
 
 
+def worst_overlap(
+    a_xyz: np.ndarray,
+    a_r: np.ndarray,
+    b_xyz: np.ndarray,
+    b_r: np.ndarray,
+    *,
+    tol: float = 0.4,
+) -> tuple[float, int, int]:
+    """The single most-overlapping atom pair between two sets.
+
+    Args:
+        a_xyz: (A, 3) coordinates of the first set.
+        a_r: (A,) van der Waals radii of the first set.
+        b_xyz: (B, 3) coordinates of the second set.
+        b_r: (B,) van der Waals radii of the second set.
+        tol: Overlap allowed before a pair counts, in angstrom.
+
+    Returns:
+        ``(overlap, i, j)``: the largest van der Waals overlap and the indices of
+        the atoms in each set that make it. ``(0.0, -1, -1)`` when either set is
+        empty.
+    """
+    if len(a_xyz) == 0 or len(b_xyz) == 0:
+        return 0.0, -1, -1
+    diff = a_xyz[:, None, :] - b_xyz[None, :, :]
+    dist = np.sqrt((diff * diff).sum(-1))
+    overlap = a_r[:, None] + b_r[None, :] - tol - dist
+    i, j = np.unravel_index(int(np.argmax(overlap)), overlap.shape)
+    return float(overlap[i, j]), int(i), int(j)
+
+
 @dataclass(frozen=True)
 class ScanResult:
     """The outcome of a one-degree torsion scan.

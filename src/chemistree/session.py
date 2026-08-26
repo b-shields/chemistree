@@ -26,7 +26,7 @@ from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor, Residue
-from chemistree.torsion import ScanResult, axis_matrix, scan_torsion
+from chemistree.torsion import ScanResult, axis_matrix, scan_torsion, worst_overlap
 from chemistree.tree import Edge, FragmentNode, heavy_count
 
 
@@ -319,6 +319,95 @@ class DesignSession:
         label = self._label(group_id)
         return _rotation_report(group_id, label, degrees, applied, result)
 
+    def clashes(self, *, tol: float = 0.4) -> str:
+        """Report steric clashes in the current pose, worst first.
+
+        Lists every group pair whose atoms overlap past their van der Waals radii,
+        and — when a receptor is loaded — every group that overlaps a residue. The
+        bond between two joined groups is not a clash, so their shared anchors are
+        excluded. This is the check to run after an edit, to decide whether to
+        rotate a group to relieve a clash.
+
+        Args:
+            tol: Overlap allowed before a contact counts as a clash, in angstrom.
+
+        Returns:
+            Markdown: one line per clash, worst first, or a clear "no clashes" line.
+
+        Raises:
+            ValueError: If the ligand lacks 3D coordinates.
+        """
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("clash detection needs a ligand with 3D coordinates")
+        labels = {n.id: n for n in annotate(self.tree).nodes}
+        findings = self._ligand_clashes(labels, tol) + self._receptor_clashes(
+            labels, tol
+        )
+        findings.sort(key=lambda f: -f[0])
+        return _clashes_report(findings)
+
+    def _ligand_clashes(
+        self, labels: dict[int, NodeAnnotation], tol: float
+    ) -> list[tuple[float, str]]:
+        """Overlaps between each pair of groups, excluding their bonded anchors."""
+        anchors = self._bond_anchors()
+        nodes = self.tree.nodes
+        findings = []
+        for i, group_a in enumerate(nodes):
+            for group_b in nodes[i + 1 :]:
+                assert group_a.id is not None and group_b.id is not None
+                exclude = anchors.get(frozenset((group_a, group_b)), set())
+                a_xyz, a_r = self._heavy_atoms([group_a], exclude)
+                b_xyz, b_r = self._heavy_atoms([group_b], exclude)
+                overlap, _, _ = worst_overlap(a_xyz, a_r, b_xyz, b_r, tol=tol)
+                if overlap > _CLASH_FLOOR:
+                    findings.append(
+                        (
+                            overlap,
+                            f"[{group_a.id}] {_name(labels[group_a.id])} and "
+                            f"[{group_b.id}] {_name(labels[group_b.id])} "
+                            f"overlap by {overlap:.2f} A",
+                        )
+                    )
+        return findings
+
+    def _receptor_clashes(
+        self, labels: dict[int, NodeAnnotation], tol: float
+    ) -> list[tuple[float, str]]:
+        """The worst residue overlap for each group, when a receptor is loaded."""
+        if self.receptor is None:
+            return []
+        rec_xyz, rec_r = self.receptor.heavy_atoms()
+        rec_labels = self.receptor.heavy_atom_labels()
+        findings = []
+        for group in self.tree.nodes:
+            assert group.id is not None
+            xyz, radii = self._heavy_atoms([group], set())
+            overlap, _, j = worst_overlap(xyz, radii, rec_xyz, rec_r, tol=tol)
+            if overlap > _CLASH_FLOOR:
+                findings.append(
+                    (
+                        overlap,
+                        f"[{group.id}] {_name(labels[group.id])} and {rec_labels[j]} "
+                        f"overlap by {overlap:.2f} A",
+                    )
+                )
+        return findings
+
+    def _bond_anchors(self) -> dict[frozenset, set[tuple]]:
+        """For each bonded group pair, the two anchor atoms to exclude from clashes."""
+        anchors: dict[frozenset, set[tuple]] = {}
+        for edge in self.tree.edges:
+            a, b = edge.node_a, edge.node_b
+            a_anchor = next(
+                p.anchor_idx for p in a.current.ports if p.label == edge.label
+            )
+            b_anchor = next(
+                p.anchor_idx for p in b.current.ports if p.label == edge.label
+            )
+            anchors[frozenset((a, b))] = {(a, a_anchor), (b, b_anchor)}
+        return anchors
+
     def _attachment(
         self, node: FragmentNode
     ) -> tuple[Edge, FragmentNode, set[FragmentNode]]:
@@ -446,8 +535,7 @@ class DesignSession:
 
     def _label(self, group_id: int) -> str:
         """The chemist-facing name of a group, for reports."""
-        annotation = {n.id: n for n in annotate(self.tree).nodes}[group_id]
-        return annotation.name or annotation.classification
+        return _name({n.id: n for n in annotate(self.tree).nodes}[group_id])
 
     def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
         """Resplice an edited region into the tree, recording undo and history."""
@@ -488,6 +576,23 @@ class _GroupDistances:
     def minimum(self) -> float:
         """The closest heavy-atom approach of this group to the residue."""
         return min(distance for _, _, distance in self.per_atom)
+
+
+# Overlaps below this (angstrom, past the tolerance) are incidental contact, not
+# a clash worth reporting.
+_CLASH_FLOOR = 0.1
+
+
+def _name(annotation: NodeAnnotation) -> str:
+    """The chemist-facing name of a group: its curated name, else its class."""
+    return annotation.name or annotation.classification
+
+
+def _clashes_report(findings: list[tuple[float, str]]) -> str:
+    """Render the clash findings, already sorted worst first."""
+    if not findings:
+        return "# Clashes\n\nNo clashes."
+    return "\n".join(["# Clashes", ""] + [f"- {desc}" for _, desc in findings])
 
 
 def _rotation_report(

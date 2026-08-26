@@ -6,7 +6,9 @@ from collections import Counter
 import numpy as np
 import pytest
 from rdkit import Chem
+from rdkit.Geometry import Point3D
 
+from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.session import DesignSession
 
@@ -463,3 +465,43 @@ def test_rotate_requires_3d_coordinates():
     session = DesignSession("CCc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="3D"):
         session.rotate(_leaf_by_heavy(session, 2), 120)
+
+
+def test_clashes_reports_none_for_a_clean_structure():
+    session = DesignSession("Cc1ccccc1", three_d=True)  # a relaxed toluene
+    assert "No clashes." in session.clashes()
+
+
+def test_clashes_names_the_two_overlapping_groups():
+    # Force the ethyl's terminal carbon onto a ring carbon, then detect the clash.
+    session = DesignSession("CCc1ccccc1", three_d=True)
+    ethyl = _leaf_by_heavy(session, 2)
+    ring = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+    )
+    ring_carbon = _positions(session.tree.node(ring).current.mol)[0]
+
+    node = session.tree.node(ethyl)
+    mol = Chem.Mol(node.current.mol)
+    conf = mol.GetConformer()
+    anchor = node.current.ports[0].anchor_idx
+    terminal = next(
+        a.GetIdx()
+        for a in mol.GetAtoms()
+        if a.GetAtomicNum() == 6 and a.GetIdx() != anchor
+    )
+    shift = ring_carbon - np.array(list(conf.GetAtomPosition(terminal)))
+    for i in range(mol.GetNumAtoms()):
+        p = np.array(list(conf.GetAtomPosition(i))) + shift
+        conf.SetAtomPosition(i, Point3D(*p))
+    node.push(Fragment(mol))
+
+    report = session.clashes()
+    assert "No clashes." not in report
+    assert f"[{ethyl}]" in report and f"[{ring}]" in report
+
+
+def test_clashes_requires_3d_coordinates():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    with pytest.raises(ValueError, match="3D"):
+        session.clashes()
