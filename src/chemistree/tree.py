@@ -191,7 +191,7 @@ class FragmentTree:
         ]
         if node.id is not None:
             self._by_id.pop(node.id, None)
-        core = max(sub_nodes, key=lambda n: _heavy_count(n.current.mol))
+        core = max(sub_nodes, key=lambda n: heavy_count(n.current.mol))
         for sub in sub_nodes:
             if sub is core and node.id is not None:
                 sub.id = node.id
@@ -365,7 +365,7 @@ class FragmentTree:
         return mol
 
 
-def _heavy_count(mol: Chem.Mol) -> int:
+def heavy_count(mol: Chem.Mol) -> int:
     """Number of heavy (non-hydrogen, non-dummy) atoms in a molecule."""
     return sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1)
 

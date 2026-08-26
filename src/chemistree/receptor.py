@@ -85,6 +85,7 @@ class Receptor:
         """
         self.mol = mol
         self._residues = _group_residues(mol)
+        self._heavy: tuple[np.ndarray, np.ndarray] | None = None
 
     def residues(self, name: str | None = None) -> list[Residue]:
         """The receptor's residues, optionally filtered by name (and number).
@@ -170,6 +171,26 @@ class Receptor:
             raise NotFound(f"no {spec} residue in the receptor")
         atoms = tuple(idx for residue in targets for idx in residue.atoms)
         return self._positions(atoms)
+
+    def heavy_atoms(self) -> tuple[np.ndarray, np.ndarray]:
+        """The receptor's heavy-atom coordinates and van der Waals radii.
+
+        Computed once and cached: the receptor is read-only, so repeated clash
+        scans reuse the same arrays.
+
+        Returns:
+            An (N, 3) coordinate array and a matching (N,) radius array, for
+            steric scoring against the ligand.
+        """
+        if self._heavy is None:
+            table = Chem.GetPeriodicTable()
+            positions = self.mol.GetConformer().GetPositions()
+            numbers = np.array([a.GetAtomicNum() for a in self.mol.GetAtoms()])
+            heavy = numbers > 1
+            radius = {int(z): table.GetRvdw(int(z)) for z in np.unique(numbers[heavy])}
+            radii = np.array([radius[int(z)] for z in numbers[heavy]])
+            self._heavy = (positions[heavy], radii)
+        return self._heavy
 
     def residue_positions(self, residue: Residue) -> np.ndarray:
         """Coordinates of one residue's atoms as an (N, 3) array.

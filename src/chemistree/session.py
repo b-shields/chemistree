@@ -10,11 +10,13 @@ what constructing from the edited molecule would give.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 from rdkit import Chem
+from rdkit.Chem import rdMolTransforms
 
 from chemistree.annotations import NodeAnnotation, annotate
 from chemistree.chem import prepare_molecule
@@ -24,7 +26,8 @@ from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor, Residue
-from chemistree.tree import FragmentNode
+from chemistree.torsion import ScanResult, axis_matrix, scan_torsion
+from chemistree.tree import Edge, FragmentNode, heavy_count
 
 
 class DesignSession:
@@ -263,6 +266,189 @@ class DesignSession:
         assert best is not None  # a pocket residue has at least one nearby atom
         return best
 
+    def rotate(self, group_id: int, degrees: float, *, window: float = 60.0) -> str:
+        """Rotate a group about its attachment bond, settling to reduce clashes.
+
+        The group turns about the single bond joining it to the rest of the
+        molecule, carrying its own substituents as one rigid body. Every whole-
+        degree turn is scored for steric clash (with the rest of the ligand and,
+        when present, the receptor); the least-clashing turn within ``window`` of
+        the request is applied. The constitution is unchanged, so the SMILES stays
+        the same.
+
+        Args:
+            group_id: Id of the group to rotate.
+            degrees: Requested turn, in degrees.
+            window: Half-width, in degrees, of the search around ``degrees``.
+
+        Returns:
+            A short report: the applied turn, the clash score before and after,
+            and the global-best turn when it would relieve the clash further.
+
+        Raises:
+            ValueError: If the ligand lacks 3D coordinates or the group is the
+                only fragment.
+        """
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("rotation needs a ligand with 3D coordinates")
+        node = self.tree.node(group_id)
+        if not self.tree.neighbors(node):
+            raise ValueError("cannot rotate the only group")
+        axis_edge, parent, moving = self._attachment(node)
+        axis_point, axis_dir = self._axis(node, axis_edge)
+
+        result = self._scan(
+            node, axis_edge, parent, moving, axis_point, axis_dir, degrees, window
+        )
+        applied = result.window_best[0]
+        matrix = axis_matrix(axis_point, axis_dir, math.radians(applied))
+        for moving_node in moving:
+            rotated = Chem.Mol(moving_node.current.mol)
+            rdMolTransforms.TransformConformer(rotated.GetConformer(), matrix)
+            moving_node.push(Fragment(rotated))
+        turned = list(moving)
+
+        def undo() -> None:
+            """Revert each turned fragment to its pre-rotation snapshot."""
+            for moving_node in turned:
+                moving_node.undo()
+
+        self._undo_stack.append(undo)
+        self._record()
+
+        label = self._label(group_id)
+        return _rotation_report(group_id, label, degrees, applied, result)
+
+    def _attachment(
+        self, node: FragmentNode
+    ) -> tuple[Edge, FragmentNode, set[FragmentNode]]:
+        """The bond to rotate about, its far node, and the moving-side nodes.
+
+        The attachment bond is the incident edge whose near side (the component
+        holding ``node``) has the fewest heavy atoms, so a leaf turns alone and a
+        substituted ring turns with its substituents about the bond to the scaffold.
+        """
+        best: tuple[tuple[int, int], Edge, FragmentNode, set[FragmentNode]] | None = (
+            None
+        )
+        for edge, other in self.tree.neighbors(node):
+            side = self._moving_side(node, edge)
+            key = (sum(heavy_count(n.current.mol) for n in side), edge.label)
+            if best is None or key < best[0]:
+                best = (key, edge, other, side)
+        assert best is not None  # a non-only node has at least one incident edge
+        return best[1], best[2], best[3]
+
+    def _moving_side(self, node: FragmentNode, axis_edge: Edge) -> set[FragmentNode]:
+        """Nodes reachable from ``node`` without crossing ``axis_edge``."""
+        seen = {node}
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            for edge, other in self.tree.neighbors(current):
+                if edge is axis_edge or other in seen:
+                    continue
+                seen.add(other)
+                stack.append(other)
+        return seen
+
+    def _axis(
+        self, node: FragmentNode, axis_edge: Edge
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The rotation axis: a point on it and its direction, from ``node``'s port."""
+        port = next(p for p in node.current.ports if p.label == axis_edge.label)
+        conf = node.current.mol.GetConformer()
+        point = np.array(list(conf.GetAtomPosition(port.anchor_idx)))
+        direction = np.array(list(conf.GetAtomPosition(port.dummy_idx))) - point
+        return point, direction
+
+    def _scan(
+        self,
+        node: FragmentNode,
+        axis_edge: Edge,
+        parent: FragmentNode,
+        moving: set[FragmentNode],
+        axis_point: np.ndarray,
+        axis_dir: np.ndarray,
+        degrees: float,
+        window: float,
+    ) -> ScanResult:
+        """Score every one-degree turn of the moving side against its surroundings."""
+        # Exclude the two bonded anchors: their pair is the rotatable bond itself and
+        # its 1-3 shoulders, whose distances do not depend on the turn.
+        near_anchor = next(
+            p.anchor_idx for p in node.current.ports if p.label == axis_edge.label
+        )
+        far_anchor = next(
+            p.anchor_idx for p in parent.current.ports if p.label == axis_edge.label
+        )
+        moving_xyz, moving_r = self._heavy_atoms(moving, exclude={(node, near_anchor)})
+        static = [n for n in self.tree.nodes if n not in moving]
+        other_xyz, other_r = self._heavy_atoms(static, exclude={(parent, far_anchor)})
+        other_xyz, other_r = self._add_receptor(
+            other_xyz, other_r, moving_xyz, axis_point
+        )
+        return scan_torsion(
+            moving_xyz,
+            axis_point=axis_point,
+            axis_dir=axis_dir,
+            moving_r=moving_r,
+            other_xyz=other_xyz,
+            other_r=other_r,
+            target_deg=degrees,
+            window_deg=window,
+        )
+
+    def _heavy_atoms(
+        self, nodes: set[FragmentNode] | list[FragmentNode], exclude: set[tuple]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Heavy-atom coordinates and van der Waals radii of some nodes.
+
+        Args:
+            nodes: The nodes whose atoms to gather.
+            exclude: ``(node, atom_idx)`` pairs to leave out (the bonded anchors).
+
+        Returns:
+            An (N, 3) coordinate array and a matching (N,) radius array.
+        """
+        table = Chem.GetPeriodicTable()
+        xyz, radii = [], []
+        for node in nodes:
+            conf = node.current.mol.GetConformer()
+            for atom in node.current.mol.GetAtoms():
+                if atom.GetAtomicNum() <= 1 or (node, atom.GetIdx()) in exclude:
+                    continue
+                xyz.append(list(conf.GetAtomPosition(atom.GetIdx())))
+                radii.append(table.GetRvdw(atom.GetAtomicNum()))
+        if not xyz:
+            return np.empty((0, 3)), np.empty(0)
+        return np.array(xyz), np.array(radii)
+
+    def _add_receptor(
+        self,
+        other_xyz: np.ndarray,
+        other_r: np.ndarray,
+        moving_xyz: np.ndarray,
+        axis_point: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Append receptor heavy atoms that any turn could bring near the group."""
+        if self.receptor is None or len(moving_xyz) == 0:
+            return other_xyz, other_r
+        rec_xyz, rec_r = self.receptor.heavy_atoms()
+        reach = float(np.linalg.norm(moving_xyz - axis_point, axis=1).max())
+        near = np.linalg.norm(rec_xyz - axis_point, axis=1) < reach + 4.0
+        if not near.any():
+            return other_xyz, other_r
+        return (
+            np.vstack([other_xyz, rec_xyz[near]]),
+            np.concatenate([other_r, rec_r[near]]),
+        )
+
+    def _label(self, group_id: int) -> str:
+        """The chemist-facing name of a group, for reports."""
+        annotation = {n.id: n for n in annotate(self.tree).nodes}[group_id]
+        return annotation.name or annotation.classification
+
     def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
         """Resplice an edited region into the tree, recording undo and history."""
         sub_nodes, undo = self.tree.resplice(node, region_mol)
@@ -302,6 +488,24 @@ class _GroupDistances:
     def minimum(self) -> float:
         """The closest heavy-atom approach of this group to the residue."""
         return min(distance for _, _, distance in self.per_atom)
+
+
+def _rotation_report(
+    group_id: int, label: str, requested: float, applied: int, result: ScanResult
+) -> str:
+    """Render the outcome of a torsion rotation for the agent."""
+    before, after = result.current, result.window_best[1]
+    lines = [
+        f"Rotated [{group_id}] {label} by {applied} deg (requested {requested:g} deg).",
+        f"Clash score {before:.2f} -> {after:.2f}.",
+    ]
+    global_deg, global_score = result.global_best
+    if global_score < after - 0.05:
+        lines.append(
+            f"A larger turn to {global_deg} deg would lower the clash to "
+            f"{global_score:.2f}."
+        )
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
