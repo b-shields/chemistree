@@ -294,12 +294,10 @@ class DesignSession:
         node = self.tree.node(group_id)
         if not self.tree.neighbors(node):
             raise ValueError("cannot rotate the only group")
-        axis_edge, parent, moving = self._attachment(node)
+        axis_edge, _, moving = self._attachment(node)
         axis_point, axis_dir = self._axis(node, axis_edge)
 
-        result = self._scan(
-            node, axis_edge, parent, moving, axis_point, axis_dir, degrees, window
-        )
+        result = self._scan(self._pose(), moving, axis_point, axis_dir, degrees, window)
         applied = result.window_best[0]
         matrix = axis_matrix(axis_point, axis_dir, math.radians(applied))
         for moving_node in moving:
@@ -323,10 +321,10 @@ class DesignSession:
         """Report steric clashes in the current pose, worst first.
 
         Lists every group pair whose atoms overlap past their van der Waals radii,
-        and — when a receptor is loaded — every group that overlaps a residue. The
-        bond between two joined groups is not a clash, so their shared anchors are
-        excluded. This is the check to run after an edit, to decide whether to
-        rotate a group to relieve a clash.
+        and — when a receptor is loaded — every group that overlaps a residue. Atom
+        pairs within two bonds of each other are normal geometry, not clashes, so
+        they are excluded. This is the check to run after an edit, to decide
+        whether to rotate a group to relieve a clash.
 
         Args:
             tol: Overlap allowed before a contact counts as a clash, in angstrom.
@@ -340,39 +338,40 @@ class DesignSession:
         if not self.tree.nodes[0].current.mol.GetNumConformers():
             raise ValueError("clash detection needs a ligand with 3D coordinates")
         labels = {n.id: n for n in annotate(self.tree).nodes}
-        findings = self._ligand_clashes(labels, tol) + self._receptor_clashes(
-            labels, tol
+        pose = self._pose()
+        findings = self._ligand_clashes(pose, labels, tol) + self._receptor_clashes(
+            pose, labels, tol
         )
         findings.sort(key=lambda f: -f[0])
         return _clashes_report(findings)
 
     def _ligand_clashes(
-        self, labels: dict[int, NodeAnnotation], tol: float
+        self, pose: _Pose, labels: dict[int, NodeAnnotation], tol: float
     ) -> list[tuple[float, str]]:
-        """Overlaps between each pair of groups, excluding their bonded anchors."""
-        anchors = self._bond_anchors()
-        nodes = self.tree.nodes
+        """The worst overlap between each pair of groups, over two bonds apart."""
+        overlap = pose.radii[:, None] + pose.radii[None, :] - tol - _distances(pose.xyz)
+        far = pose.bond_dist > 2  # 1-2 and 1-3 contacts are normal geometry
+        cross = pose.node_id[:, None] != pose.node_id[None, :]
+        clashing = np.argwhere(np.triu(far & cross & (overlap > _CLASH_FLOOR), 1))
+
+        worst: dict[frozenset[int], float] = {}
+        for i, j in clashing:
+            pair = frozenset((int(pose.node_id[i]), int(pose.node_id[j])))
+            worst[pair] = max(worst.get(pair, 0.0), float(overlap[i, j]))
         findings = []
-        for i, group_a in enumerate(nodes):
-            for group_b in nodes[i + 1 :]:
-                assert group_a.id is not None and group_b.id is not None
-                exclude = anchors.get(frozenset((group_a, group_b)), set())
-                a_xyz, a_r = self._heavy_atoms([group_a], exclude)
-                b_xyz, b_r = self._heavy_atoms([group_b], exclude)
-                overlap, _, _ = worst_overlap(a_xyz, a_r, b_xyz, b_r, tol=tol)
-                if overlap > _CLASH_FLOOR:
-                    findings.append(
-                        (
-                            overlap,
-                            f"[{group_a.id}] {_name(labels[group_a.id])} and "
-                            f"[{group_b.id}] {_name(labels[group_b.id])} "
-                            f"overlap by {overlap:.2f} A",
-                        )
-                    )
+        for pair, value in worst.items():
+            a, b = sorted(pair)
+            findings.append(
+                (
+                    value,
+                    f"[{a}] {_name(labels[a])} and [{b}] {_name(labels[b])} "
+                    f"overlap by {value:.2f} A",
+                )
+            )
         return findings
 
     def _receptor_clashes(
-        self, labels: dict[int, NodeAnnotation], tol: float
+        self, pose: _Pose, labels: dict[int, NodeAnnotation], tol: float
     ) -> list[tuple[float, str]]:
         """The worst residue overlap for each group, when a receptor is loaded."""
         if self.receptor is None:
@@ -380,33 +379,41 @@ class DesignSession:
         rec_xyz, rec_r = self.receptor.heavy_atoms()
         rec_labels = self.receptor.heavy_atom_labels()
         findings = []
-        for group in self.tree.nodes:
-            assert group.id is not None
-            xyz, radii = self._heavy_atoms([group], set())
-            overlap, _, j = worst_overlap(xyz, radii, rec_xyz, rec_r, tol=tol)
+        for group_id in np.unique(pose.node_id):
+            mask = pose.node_id == group_id
+            overlap, _, j = worst_overlap(
+                pose.xyz[mask], pose.radii[mask], rec_xyz, rec_r, tol=tol
+            )
             if overlap > _CLASH_FLOOR:
                 findings.append(
                     (
                         overlap,
-                        f"[{group.id}] {_name(labels[group.id])} and {rec_labels[j]} "
-                        f"overlap by {overlap:.2f} A",
+                        f"[{group_id}] {_name(labels[int(group_id)])} and "
+                        f"{rec_labels[j]} overlap by {overlap:.2f} A",
                     )
                 )
         return findings
 
-    def _bond_anchors(self) -> dict[frozenset, set[tuple]]:
-        """For each bonded group pair, the two anchor atoms to exclude from clashes."""
-        anchors: dict[frozenset, set[tuple]] = {}
-        for edge in self.tree.edges:
-            a, b = edge.node_a, edge.node_b
-            a_anchor = next(
-                p.anchor_idx for p in a.current.ports if p.label == edge.label
-            )
-            b_anchor = next(
-                p.anchor_idx for p in b.current.ports if p.label == edge.label
-            )
-            anchors[frozenset((a, b))] = {(a, a_anchor), (b, b_anchor)}
-        return anchors
+    def _pose(self) -> _Pose:
+        """The current whole-molecule heavy-atom pose, tagged by group.
+
+        Returns:
+            A pose with each heavy atom's coordinates, van der Waals radius, owning
+            group id, and the bond-count distance matrix, all built from the
+            reconstructed molecule so clash logic sees the real bond graph.
+        """
+        mol = self.molecule()
+        table = Chem.GetPeriodicTable()
+        heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+        numbers = [mol.GetAtomWithIdx(i).GetAtomicNum() for i in heavy]
+        node_id = [mol.GetAtomWithIdx(i).GetIntProp("node_id") for i in heavy]
+        bond_dist = Chem.GetDistanceMatrix(mol)[np.ix_(heavy, heavy)]
+        return _Pose(
+            xyz=mol.GetConformer().GetPositions()[heavy],
+            radii=np.array([table.GetRvdw(z) for z in numbers]),
+            node_id=np.array(node_id),
+            bond_dist=bond_dist,
+        )
 
     def _attachment(
         self, node: FragmentNode
@@ -453,27 +460,27 @@ class DesignSession:
 
     def _scan(
         self,
-        node: FragmentNode,
-        axis_edge: Edge,
-        parent: FragmentNode,
+        pose: _Pose,
         moving: set[FragmentNode],
         axis_point: np.ndarray,
         axis_dir: np.ndarray,
         degrees: float,
         window: float,
     ) -> ScanResult:
-        """Score every one-degree turn of the moving side against its surroundings."""
-        # Exclude the two bonded anchors: their pair is the rotatable bond itself and
-        # its 1-3 shoulders, whose distances do not depend on the turn.
-        near_anchor = next(
-            p.anchor_idx for p in node.current.ports if p.label == axis_edge.label
-        )
-        far_anchor = next(
-            p.anchor_idx for p in parent.current.ports if p.label == axis_edge.label
-        )
-        moving_xyz, moving_r = self._heavy_atoms(moving, exclude={(node, near_anchor)})
-        static = [n for n in self.tree.nodes if n not in moving]
-        other_xyz, other_r = self._heavy_atoms(static, exclude={(parent, far_anchor)})
+        """Score every one-degree turn of the moving side against its surroundings.
+
+        The moving atoms are the group's subtree; the surroundings are the rest of
+        the ligand more than two bonds away (nearer atoms hold fixed geometry the
+        turn cannot change) plus any nearby receptor atoms.
+        """
+        moving_ids = {n.id for n in moving}
+        is_moving = np.isin(pose.node_id, list(moving_ids))
+        # Keep a static atom only if it is over two bonds from every moving atom.
+        near_moving = (pose.bond_dist[~is_moving][:, is_moving] <= 2).any(axis=1)
+        other_xyz = pose.xyz[~is_moving][~near_moving]
+        other_r = pose.radii[~is_moving][~near_moving]
+
+        moving_xyz = pose.xyz[is_moving]
         other_xyz, other_r = self._add_receptor(
             other_xyz, other_r, moving_xyz, axis_point
         )
@@ -481,37 +488,12 @@ class DesignSession:
             moving_xyz,
             axis_point=axis_point,
             axis_dir=axis_dir,
-            moving_r=moving_r,
+            moving_r=pose.radii[is_moving],
             other_xyz=other_xyz,
             other_r=other_r,
             target_deg=degrees,
             window_deg=window,
         )
-
-    def _heavy_atoms(
-        self, nodes: set[FragmentNode] | list[FragmentNode], exclude: set[tuple]
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Heavy-atom coordinates and van der Waals radii of some nodes.
-
-        Args:
-            nodes: The nodes whose atoms to gather.
-            exclude: ``(node, atom_idx)`` pairs to leave out (the bonded anchors).
-
-        Returns:
-            An (N, 3) coordinate array and a matching (N,) radius array.
-        """
-        table = Chem.GetPeriodicTable()
-        xyz, radii = [], []
-        for node in nodes:
-            conf = node.current.mol.GetConformer()
-            for atom in node.current.mol.GetAtoms():
-                if atom.GetAtomicNum() <= 1 or (node, atom.GetIdx()) in exclude:
-                    continue
-                xyz.append(list(conf.GetAtomPosition(atom.GetIdx())))
-                radii.append(table.GetRvdw(atom.GetAtomicNum()))
-        if not xyz:
-            return np.empty((0, 3)), np.empty(0)
-        return np.array(xyz), np.array(radii)
 
     def _add_receptor(
         self,
@@ -581,6 +563,30 @@ class _GroupDistances:
 # Overlaps below this (angstrom, past the tolerance) are incidental contact, not
 # a clash worth reporting.
 _CLASH_FLOOR = 0.1
+
+
+@dataclass(frozen=True)
+class _Pose:
+    """The current molecule's heavy atoms, ready for clash geometry.
+
+    Attributes:
+        xyz: (N, 3) heavy-atom coordinates.
+        radii: (N,) van der Waals radii.
+        node_id: (N,) owning group id per atom.
+        bond_dist: (N, N) shortest bond-count distance between heavy atoms, so
+            pairs within two bonds (normal geometry) can be excluded.
+    """
+
+    xyz: np.ndarray
+    radii: np.ndarray
+    node_id: np.ndarray
+    bond_dist: np.ndarray
+
+
+def _distances(xyz: np.ndarray) -> np.ndarray:
+    """The (N, N) matrix of pairwise Euclidean distances."""
+    diff = xyz[:, None, :] - xyz[None, :, :]
+    return np.sqrt((diff * diff).sum(-1))
 
 
 def _name(annotation: NodeAnnotation) -> str:

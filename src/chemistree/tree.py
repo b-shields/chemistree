@@ -334,13 +334,21 @@ class FragmentTree:
         """Fuse all current fragments back into a single molecule.
 
         Combines every node's current fragment, then for each edge bonds the two
-        anchor atoms and deletes the dummy atoms that marked the port.
+        anchor atoms and deletes the dummy atoms that marked the port. Every atom
+        carries a ``node_id`` int property naming the group it came from, so a
+        caller can attribute an atom in the whole molecule back to its group.
         """
         if not self.nodes:
             raise ValueError("cannot reconstruct an empty tree")
-        combined = self.nodes[0].current.mol
-        for node in self.nodes[1:]:
-            combined = Chem.CombineMols(combined, node.current.mol)
+        tagged = []
+        for node in self.nodes:
+            piece = Chem.Mol(node.current.mol)
+            for atom in piece.GetAtoms():
+                atom.SetIntProp("node_id", node.id if node.id is not None else -1)
+            tagged.append(piece)
+        combined = tagged[0]
+        for piece in tagged[1:]:
+            combined = Chem.CombineMols(combined, piece)
 
         rw = Chem.RWMol(combined)
         bond_types = {edge.label: edge.bond_type for edge in self.edges}
