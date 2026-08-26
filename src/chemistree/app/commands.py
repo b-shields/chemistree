@@ -17,6 +17,7 @@ def run_command(session: DesignSession, text: str) -> str:
         undo
         group <id>
         distance <residue>
+        contacts [dist_cutoff]
 
     Ids come from ``describe`` (the group overview); atom position ids come from
     ``group <id>`` (``describe_group``).
@@ -57,4 +58,6 @@ def run_command(session: DesignSession, text: str) -> str:
         return session.describe_group(int(args[0]))
     if command == "distance":
         return session.distance(args[0])
+    if command == "contacts":
+        return session.contacts(float(args[0])) if args else session.contacts()
     raise ValueError(f"unknown command: {command!r}")

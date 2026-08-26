@@ -81,19 +81,24 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
         f"recognized, pass a SMILES. Group ids come from the group listing; before "
         f"grow or mutate, call describe_group(id) to get the atom position ids. "
         f"When a request names a residue (near/closest to it), call distance to see "
-        f"which group is closest before editing. Never read, write, or run files or "
-        f"shell commands. Reply in one short sentence.{primed_note}"
+        f"which group is closest, or contacts to map the whole binding site, before "
+        f"editing. Ids and atom positions are internal addressing: speak to the user "
+        f"in natural language and chemistry terms (groups, rings, ortho/meta/para, "
+        f"element names), not port numbers or atom ids, unless they ask for them. "
+        f"Never read, write, or run files or shell commands. Reply in one short "
+        f"sentence.{primed_note}"
     )
 
 
 _SYSTEM_PROMPT = _system_prompt(
-    "describe, describe_group, smiles, swap, grow, mutate, remove, undo, distance"
+    "describe, describe_group, smiles, swap, grow, mutate, remove, undo, distance, "
+    "contacts"
 )
 # The primed mode seeds the group listing up front and refreshes it after each edit,
 # so the describe overview is blocked; the agent acts on the given ids and calls
 # describe_group for atom positions.
 _PRIMED_PROMPT = _system_prompt(
-    "describe_group, smiles, swap, grow, mutate, remove, undo, distance",
+    "describe_group, smiles, swap, grow, mutate, remove, undo, distance, contacts",
     primed_note=(
         " You are given the current group listing, refreshed after every edit; use "
         "those ids directly and call describe_group(id) for atom positions."
@@ -139,6 +144,7 @@ _TOOL_PHRASES = {
     "remove": "removing a group",
     "undo": "undoing the last edit",
     "distance": "measuring distances",
+    "contacts": "mapping the binding site",
     "describe": "reading the molecule",
     "describe_group": "reading a group",
     "smiles": "reading the molecule",

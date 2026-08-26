@@ -171,6 +171,17 @@ class Receptor:
         atoms = tuple(idx for residue in targets for idx in residue.atoms)
         return self._positions(atoms)
 
+    def residue_positions(self, residue: Residue) -> np.ndarray:
+        """Coordinates of one residue's atoms as an (N, 3) array.
+
+        Args:
+            residue: A residue of this receptor.
+
+        Returns:
+            The residue's atom coordinates.
+        """
+        return self._positions(residue.atoms)
+
     def pocket(self, ligand: Chem.Mol, within: float = 8.0) -> list[Residue]:
         """Residues with any atom within a distance of the ligand.
 

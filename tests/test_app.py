@@ -77,6 +77,19 @@ def test_command_group_returns_the_detail_section():
     assert "**Positions:**" in detail
 
 
+def test_command_contacts_reports_site_contacts():
+    import pathlib
+
+    data = pathlib.Path(__file__).parent / "data" / "abl1"
+    ligand = Chem.MolFromMolFile(str(data / "reference.sdf"), removeHs=False)
+    receptor = Chem.MolFromPDBFile(
+        str(data / "receptor.pdb"), removeHs=False, sanitize=False
+    )
+    session = DesignSession(ligand, receptor)
+    report = run_command(session, "contacts 4.5")
+    assert report.startswith("# Binding-site contacts (within 4.5 A)")
+
+
 def test_command_unknown_raises():
     session = DesignSession("Cc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="unknown command"):

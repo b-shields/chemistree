@@ -284,6 +284,65 @@ def test_distance_requires_a_receptor():
         session.distance("ASP")
 
 
+def test_contacts_lists_the_closest_group_and_atom_per_site_residue():
+    session = _abl1_session()
+    report = session.contacts(dist_cutoff=4.5)
+    assert report.startswith("# Binding-site contacts (within 4.5 A)")
+
+    # One row per pocket residue; a known contact residue appears.
+    pocket = session.receptor.pocket(session.molecule(), within=4.5)
+    rows = [line for line in report.splitlines() if " | atom " in line]
+    assert len(rows) == len(pocket)
+    assert any("ASP" in row for row in rows)
+
+
+def test_contacts_distance_matches_ground_truth_for_a_residue():
+    session = _abl1_session()
+    report = session.contacts(dist_cutoff=4.5)
+
+    # Pick a residue named in the report and confirm its printed distance equals
+    # the true closest approach of any (port-excluded) ligand heavy atom.
+    pocket = session.receptor.pocket(session.molecule(), within=4.5)
+    residue = pocket[0]
+    spec = f"{residue.name}{residue.number}"
+    coords = session.receptor.residue_positions(residue)
+    truth = min(
+        float(
+            np.sqrt(
+                ((coords - np.array(list(conf.GetAtomPosition(a.GetIdx())))) ** 2).sum(
+                    -1
+                )
+            ).min()
+        )
+        for node in session.tree.nodes
+        for conf in [node.current.mol.GetConformer()]
+        for a in node.current.mol.GetAtoms()
+        if a.GetAtomicNum() > 1
+    )
+    row = next(line for line in report.splitlines() if f"| {spec} " in line)
+    printed = float(row.split("|")[4].strip())
+    assert printed == pytest.approx(truth, abs=0.01)
+
+
+def test_contacts_never_cites_a_port_atom():
+    session = _abl1_session()
+    report = session.contacts(dist_cutoff=6.0)
+    for line in report.splitlines():
+        if " | atom " not in line:
+            continue
+        # Row: | ResName | [id] label | atom N (Sym) | dist |
+        node_id = int(line.split("]")[0].split("[")[1])
+        atom_id = int(line.split("atom ")[1].split(" ")[0])
+        atom = session.tree.node(node_id).current.mol.GetAtomWithIdx(atom_id)
+        assert atom.GetAtomicNum() > 1  # never a hydrogen or a dummy port
+
+
+def test_contacts_requires_a_receptor():
+    session = DesignSession("Cc1ccccc1", three_d=True)
+    with pytest.raises(ValueError, match="receptor"):
+        session.contacts()
+
+
 def test_edits_are_undoable():
     session = DesignSession("Cc1ccccc1", three_d=False)
     start = session.smiles()

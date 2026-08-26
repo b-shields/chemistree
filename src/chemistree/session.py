@@ -16,14 +16,14 @@ from dataclasses import dataclass
 import numpy as np
 from rdkit import Chem
 
-from chemistree.annotations import annotate
+from chemistree.annotations import NodeAnnotation, annotate
 from chemistree.chem import prepare_molecule
 from chemistree.describe import describe_group, describe_tree
 from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
-from chemistree.receptor import Receptor
+from chemistree.receptor import Receptor, Residue
 from chemistree.tree import FragmentNode
 
 
@@ -206,6 +206,63 @@ class DesignSession:
         groups.sort(key=lambda g: g.minimum)
         return _distance_report(residue_id, groups)
 
+    def contacts(self, dist_cutoff: float = 4.5) -> str:
+        """Report the closest group and atom for each binding-site residue.
+
+        The binding site is every receptor residue with an atom within
+        ``dist_cutoff`` of any ligand heavy atom. For each such residue this names
+        the single closest ligand group and the atom in it (ports excluded), so a
+        request that targets a residue maps straight to a group and atom to edit.
+
+        Args:
+            dist_cutoff: Site radius in angstrom: a residue counts when any of its
+                atoms is within this distance of any ligand heavy atom.
+
+        Returns:
+            Markdown: a table of residue, closest group, closest atom, and their
+            distance, sorted closest first.
+
+        Raises:
+            ValueError: If no receptor is loaded or the ligand lacks 3D coordinates.
+        """
+        if self.receptor is None:
+            raise ValueError("spatial contacts need a receptor")
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("spatial contacts need a ligand with 3D coordinates")
+        labels = {node.id: node for node in annotate(self.tree).nodes}
+        contacts = [
+            self._closest_contact(
+                residue, self.receptor.residue_positions(residue), labels
+            )
+            for residue in self.receptor.pocket(self.molecule(), within=dist_cutoff)
+        ]
+        contacts.sort(key=lambda c: c.distance)
+        return _contacts_report(dist_cutoff, contacts)
+
+    def _closest_contact(
+        self,
+        residue: Residue,
+        coords: np.ndarray,
+        labels: dict[int, NodeAnnotation],
+    ) -> _Contact:
+        """The closest group and atom of the ligand to one residue's atoms."""
+        best: _Contact | None = None
+        for node in self.tree.nodes:
+            assert node.id is not None
+            annotation = labels[node.id]
+            for idx, symbol, distance in _atom_distances(node.current.mol, coords):
+                if best is None or distance < best.distance:
+                    best = _Contact(
+                        residue=f"{residue.name}{residue.number}",
+                        node_id=node.id,
+                        label=annotation.name or annotation.classification,
+                        atom_id=idx,
+                        symbol=symbol,
+                        distance=distance,
+                    )
+        assert best is not None  # a pocket residue has at least one nearby atom
+        return best
+
     def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
         """Resplice an edited region into the tree, recording undo and history."""
         sub_nodes, undo = self.tree.resplice(node, region_mol)
@@ -245,6 +302,36 @@ class _GroupDistances:
     def minimum(self) -> float:
         """The closest heavy-atom approach of this group to the residue."""
         return min(distance for _, _, distance in self.per_atom)
+
+
+@dataclass(frozen=True)
+class _Contact:
+    """One binding-site residue's closest ligand group and atom."""
+
+    residue: str
+    node_id: int
+    label: str
+    atom_id: int
+    symbol: str
+    distance: float
+
+
+def _contacts_report(dist_cutoff: float, contacts: list[_Contact]) -> str:
+    """Render the binding-site contacts table, contacts already sorted."""
+    lines = [
+        f"# Binding-site contacts (within {dist_cutoff:g} A)",
+        "",
+    ]
+    if not contacts:
+        lines.append(f"No residue within {dist_cutoff:g} A of the molecule.")
+        return "\n".join(lines)
+    lines += ["| residue | group | closest atom | distance (A) |", "|---|---|---|---|"]
+    for contact in contacts:
+        lines.append(
+            f"| {contact.residue} | [{contact.node_id}] {contact.label} "
+            f"| atom {contact.atom_id} ({contact.symbol}) | {contact.distance:.2f} |"
+        )
+    return "\n".join(lines)
 
 
 def _atom_distances(mol: Chem.Mol, residue: np.ndarray) -> list[tuple[int, str, float]]:

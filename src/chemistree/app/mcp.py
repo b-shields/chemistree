@@ -188,5 +188,21 @@ def distance(residue: str) -> str:
     return _command(f"distance {residue}")
 
 
+@mcp.tool
+def contacts(dist_cutoff: float = 4.5) -> str:
+    """Map the binding site: the closest group and atom for each nearby residue.
+
+    Use this to see how the molecule sits in the pocket, or before targeting a
+    residue. It returns one row per residue within ``dist_cutoff`` of any ligand
+    heavy atom, naming the closest group and the atom in it — so a request like
+    "grow toward the aspartate" maps straight to a group and atom to edit.
+
+    Args:
+        dist_cutoff: Site radius in angstrom (a residue counts when any atom is
+            within this distance of any ligand heavy atom).
+    """
+    return _command(f"contacts {dist_cutoff}")
+
+
 if __name__ == "__main__":
     mcp.run()
