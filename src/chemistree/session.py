@@ -26,6 +26,7 @@ from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
 from chemistree.receptor import Receptor, Residue
+from chemistree.scoring import ScoreComponents, score_pose
 from chemistree.torsion import ScanResult, axis_matrix, scan_torsion, worst_overlap
 from chemistree.tree import Edge, FragmentNode, heavy_count
 
@@ -73,8 +74,14 @@ class DesignSession:
 
         Lists each group's id, name, fragment, role, and connections. Call
         :meth:`describe_group` for a group's atom positions, rings, and topology.
+        When the session has a receptor and the ligand is posed in 3D, the current
+        predicted affinity is appended, so it updates with every edit.
         """
-        return describe_tree(self.tree)
+        overview = describe_tree(self.tree)
+        components = self._pose_components()
+        if components is None:
+            return overview
+        return f"{overview}\n\n{_affinity_line(components)}"
 
     def describe_group(
         self, group_id: int, *, radius: int = 3, use_matrix: bool = False
@@ -345,6 +352,20 @@ class DesignSession:
         findings.sort(key=lambda f: -f[0])
         return _clashes_report(findings)
 
+    def _pose_components(self) -> ScoreComponents | None:
+        """The current pose's Vinardo score, or None without a posed receptor.
+
+        Returns:
+            The score breakdown when the session has a receptor and the ligand is
+            posed in 3D; None otherwise, so callers can omit affinity cleanly.
+        """
+        if self.receptor is None:
+            return None
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            return None
+        coords, typing = self.receptor.scoring_context()
+        return score_pose(self.molecule(), coords, typing)
+
     def _ligand_clashes(
         self, pose: _Pose, labels: dict[int, NodeAnnotation], tol: float
     ) -> list[tuple[float, str]]:
@@ -592,6 +613,13 @@ def _distances(xyz: np.ndarray) -> np.ndarray:
 def _name(annotation: NodeAnnotation) -> str:
     """The chemist-facing name of a group: its curated name, else its class."""
     return annotation.name or annotation.classification
+
+
+def _affinity_line(components: ScoreComponents) -> str:
+    """The predicted-affinity line appended to a receptor-posed describe."""
+    return (
+        f"**Predicted affinity (Vinardo):** {components.total:.2f} " "(lower is better)"
+    )
 
 
 def _clashes_report(findings: list[tuple[float, str]]) -> str:

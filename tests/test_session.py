@@ -2,6 +2,7 @@
 
 import itertools
 import pathlib
+import re
 from collections import Counter
 
 import numpy as np
@@ -540,3 +541,46 @@ def test_clashes_requires_3d_coordinates():
     session = DesignSession("Cc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="3D"):
         session.clashes()
+
+
+def test_describe_shows_predicted_affinity_for_the_crystal_pose():
+    session = _abl1_session()
+    describe = session.describe()
+    assert "Predicted affinity (Vinardo):" in describe
+    # The co-crystallized pose scores about -11.6 (matches the scoring unit test).
+    assert _affinity(describe) == pytest.approx(-11.6, abs=0.2)
+
+
+def test_describe_affinity_worsens_when_a_group_is_shoved_into_the_receptor():
+    session = _abl1_session()
+    before = _affinity(session.describe())
+    # Shove one group into the receptor: the clash penalty must raise the score.
+    node = session.tree.nodes[0]
+    mol = Chem.Mol(node.current.mol)
+    conf = mol.GetConformer()
+    for i in range(mol.GetNumAtoms()):
+        p = np.array(list(conf.GetAtomPosition(i))) + np.array([1.5, 0.0, 0.0])
+        conf.SetAtomPosition(i, Point3D(*p))
+    node.push(Fragment(mol))
+    assert _affinity(session.describe()) > before
+
+
+def test_describe_omits_affinity_without_a_receptor():
+    session = DesignSession("Cc1ccccc1", three_d=True)
+    assert "Predicted affinity" not in session.describe()
+
+
+def test_describe_omits_affinity_without_3d_coordinates():
+    receptor = Chem.MolFromPDBFile(
+        str(DATA / "receptor.pdb"), removeHs=False, sanitize=False
+    )
+    session = DesignSession("Cc1ccccc1", receptor, three_d=False)
+    assert "Predicted affinity" not in session.describe()
+
+
+def _affinity(describe: str) -> float:
+    """The numeric Vinardo affinity parsed from a describe overview."""
+    line = next(ln for ln in describe.splitlines() if "Predicted affinity" in ln)
+    match = re.search(r"(-?\d+\.\d+)", line)
+    assert match is not None
+    return float(match.group(1))

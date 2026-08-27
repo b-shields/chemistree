@@ -14,6 +14,7 @@ import numpy as np
 from rdkit import Chem
 
 from chemistree.errors import NotFound
+from chemistree.scoring import AtomTyping, atom_typing
 from chemistree.tree import FragmentNode
 
 # Default proximity radius (angstrom). Loose enough to grow toward a nearby residue,
@@ -86,6 +87,7 @@ class Receptor:
         self.mol = mol
         self._residues = _group_residues(mol)
         self._heavy: tuple[np.ndarray, np.ndarray] | None = None
+        self._scoring: tuple[np.ndarray, AtomTyping] | None = None
 
     def residues(self, name: str | None = None) -> list[Residue]:
         """The receptor's residues, optionally filtered by name (and number).
@@ -211,6 +213,22 @@ class Receptor:
                     f"{info.GetResidueName().strip()}{info.GetResidueNumber()}"
                 )
         return labels
+
+    def scoring_context(self) -> tuple[np.ndarray, AtomTyping]:
+        """The receptor's heavy-atom coordinates and Vinardo typing, cached.
+
+        Built once and reused: the receptor is read-only, so repeated pose scores
+        reuse the same coordinates and per-atom typing.
+
+        Returns:
+            An (N, 3) coordinate array and its aligned :class:`AtomTyping`, ready
+            to score a ligand pose against.
+        """
+        if self._scoring is None:
+            heavy = Chem.RemoveAllHs(self.mol)
+            coords = heavy.GetConformer().GetPositions()
+            self._scoring = (coords, atom_typing(heavy))
+        return self._scoring
 
     def residue_positions(self, residue: Residue) -> np.ndarray:
         """Coordinates of one residue's atoms as an (N, 3) array.
