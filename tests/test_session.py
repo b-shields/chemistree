@@ -1,5 +1,6 @@
 """The redesigned, id-addressed design session."""
 
+import itertools
 import pathlib
 from collections import Counter
 
@@ -226,6 +227,40 @@ def test_grow_on_a_substituted_ring_keeps_the_ring_intact():
     # The aromatic ring keeps the geometry it had before the grow.
     after = _ring_bond_lengths(session.tree.node(ring).current.mol)
     assert after == pytest.approx(before, abs=1e-3)
+
+
+def test_swap_reshaping_a_carbon_keeps_it_tetrahedral():
+    # Regression: swapping a methyl (-CH3) for a hydroxymethyl (-CH2OH) changes
+    # the carbon's substituents (an H gives way to an O). The overlay must not
+    # pin the surviving hydrogens onto the old three-hydrogen frame; doing so left
+    # no tetrahedral slot for the new oxygen and folded it in to a ~58 deg angle.
+    session = DesignSession("Cc1ccccc1", three_d=True)  # toluene
+    methyl = next(
+        n.id
+        for n in session.tree.nodes
+        if sum(1 for a in n.current.mol.GetAtoms() if a.GetAtomicNum() > 1) == 1
+    )
+    session.swap(methyl, "[*]CO")  # -> benzyl alcohol
+    assert session.smiles() == Chem.CanonSmiles("OCc1ccccc1")
+
+    mol = session.molecule()
+    conf = mol.GetConformer()
+    site = next(
+        a
+        for a in mol.GetAtoms()
+        if a.GetAtomicNum() == 6
+        and any(n.GetAtomicNum() == 8 for n in a.GetNeighbors())
+        and any(n.GetIsAromatic() for n in a.GetNeighbors())
+    )
+    p = np.array(conf.GetAtomPosition(site.GetIdx()))
+    neighbors = [n.GetIdx() for n in site.GetNeighbors()]
+    for i, j in itertools.combinations(neighbors, 2):
+        vi = np.array(conf.GetAtomPosition(i)) - p
+        vj = np.array(conf.GetAtomPosition(j)) - p
+        vi /= np.linalg.norm(vi)
+        vj /= np.linalg.norm(vj)
+        angle = np.degrees(np.arccos(np.clip(np.dot(vi, vj), -1, 1)))
+        assert angle > 100  # every angle tetrahedral, not a folded ~58 deg
 
 
 def _ring_bond_lengths(mol: Chem.Mol) -> list[float]:

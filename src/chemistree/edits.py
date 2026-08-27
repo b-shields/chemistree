@@ -410,11 +410,15 @@ def _should_pin(
     """Whether to fix a matched atom to its old position.
 
     Heavy atoms and port dummies are always pinned; they define the frame. A
-    hydrogen is pinned only when its parent heavy atom is itself a matched pair.
-    A genuinely corresponding hydrogen (on a preserved stereocenter) is then held
-    so the center keeps its handedness, while a hydrogen matched by coincidence
-    (a new ring H mapped to an old methyl H) is left free to relax, so the new
-    ring is not dragged onto a wrong position.
+    hydrogen is pinned only when it genuinely corresponds: its parent is a matched
+    pair *and* that parent keeps the same hydrogen count. A preserved stereocenter
+    then holds its hydrogen so the center keeps its handedness. When the parent's
+    substituents change (a methyl carbon becoming a hydroxymethyl carbon loses a
+    hydrogen for an oxygen), its surviving hydrogens are left free: pinning them
+    onto the old frame leaves no tetrahedral slot for the new substituent and
+    folds it inward. A hydrogen matched by coincidence (a new ring H mapped to an
+    old methyl H) is likewise left free, so the new ring is not dragged onto a
+    wrong position.
 
     Args:
         new: The new group being placed.
@@ -429,9 +433,16 @@ def _should_pin(
     atom = new.GetAtomWithIdx(ni)
     if atom.GetAtomicNum() != 1:
         return True
-    new_parent = atom.GetNeighbors()[0].GetIdx()
-    old_parent = old.GetAtomWithIdx(oi).GetNeighbors()[0].GetIdx()
-    return bool(corr_new_to_old.get(new_parent) == old_parent)
+    new_parent = atom.GetNeighbors()[0]
+    old_parent = old.GetAtomWithIdx(oi).GetNeighbors()[0]
+    if corr_new_to_old.get(new_parent.GetIdx()) != old_parent.GetIdx():
+        return False
+    return _hydrogen_count(new_parent) == _hydrogen_count(old_parent)
+
+
+def _hydrogen_count(atom: Chem.Atom) -> int:
+    """Number of explicit hydrogen neighbors of an atom."""
+    return sum(1 for n in atom.GetNeighbors() if n.GetAtomicNum() == 1)
 
 
 def _fixed_atoms(
