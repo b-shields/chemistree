@@ -5,42 +5,136 @@
   <title>chemistree</title>
   <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
   <style>
+    :root {
+      --bg: #0d0d0d;      /* page + inset viewports */
+      --panel: #151515;   /* raised panel surface   */
+      --border: #383838;  /* crisp panel edge       */
+      --text: #ddd;
+      --muted: #8a8a8a;
+      --accent: #7fd08a;
+    }
+    * { box-sizing: border-box; }
     body {
       font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 16px;
-      background: #0d0d0d; color: #ddd;
+      background: var(--bg); color: var(--text);
     }
-    .row { display: flex; gap: 16px; align-items: flex-start; }
-    #mol2d { width: 420px; height: 420px; border: 1px solid #333; }
-    #mol3d { flex: 1; height: 420px; border: 1px solid #333; position: relative; }
-    #chat { margin-top: 12px; }
+    .row { display: flex; gap: 12px; align-items: stretch; }
+
+    /* Raised panel: a labeled header rule over an inset viewport. */
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      display: flex; flex-direction: column;
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 30px; padding: 0 10px; border-bottom: 1px solid var(--border);
+      font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--muted); user-select: none;
+    }
+    .panel-head .acts { display: flex; gap: 2px; }
+    .icon {
+      position: relative;
+      background: transparent; border: 1px solid transparent; color: var(--muted);
+      cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 6px;
+    }
+    .icon:hover { color: var(--text); border-color: var(--border); }
+    .icon.flash { color: var(--accent); border-color: var(--accent); }
+    /* Immediate hover label naming each button's function. */
+    .icon::after {
+      content: attr(data-tip); position: absolute; top: 135%; right: 0;
+      white-space: nowrap; background: #000; color: var(--text);
+      border: 1px solid var(--border); padding: 3px 6px; font-size: 11px;
+      text-transform: none; letter-spacing: normal; z-index: 10;
+      opacity: 0; pointer-events: none; transition: opacity 0.12s;
+    }
+    .icon.flash::after { content: "copied"; }
+    .icon:hover::after { opacity: 1; }
+
+    .panel.p2d { width: 380px; }
+    #mol2d { width: 378px; height: 380px; background: var(--bg); }
+    #mol2d svg { display: block; }
+
+    .panel.p3d { flex: 1; }
+    #mol3d { flex: 1; min-height: 0; position: relative; background: var(--bg); }
+
+    /* Trace filmstrip: one thumbnail per edit, newest on the right. */
+    .trace {
+      display: flex; gap: 8px; height: 100px; padding: 8px;
+      overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .trace:empty { display: none; }
+    .thumb {
+      flex: 0 0 auto; width: 84px; height: 84px; position: relative;
+      background: var(--panel); border: 1px solid var(--border);
+    }
+    .thumb.current { border-color: var(--accent); }
+    .thumb svg { width: 100%; height: 100%; display: block; }
+    .thumb .step, .thumb .aff {
+      text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg);  /* legible over bonds */
+    }
+    .thumb .step {
+      position: absolute; top: 2px; left: 4px; font-size: 9px; color: var(--muted);
+    }
+    .thumb .aff {
+      position: absolute; bottom: 1px; left: 0; right: 0; text-align: center;
+      font-size: 10px; color: var(--muted);
+    }
+    .thumb.best .aff { color: var(--accent); font-weight: 600; }  /* best Vinardo */
+    .trace::-webkit-scrollbar { height: 8px; }
+    .trace::-webkit-scrollbar-thumb { background: #333; }
+
+    .panel.chat { margin-top: 12px; }
     #feed {
-      height: 110px; overflow-y: auto; padding: 8px 10px;
-      background: #111; border: 1px solid #333; border-bottom: none;
+      height: 110px; overflow-y: auto; padding: 8px 10px; background: var(--bg);
       display: flex; flex-direction: column; gap: 6px;
     }
     .msg { white-space: pre-wrap; }
-    .msg.user { color: #7fd08a; }
-    .msg.tool { color: #888; font-style: italic; }
+    .msg.user { color: var(--accent); }
+    .msg.tool { color: var(--muted); font-style: italic; }
     .msg.err { color: #e06c6c; }
     #say {
-      width: 100%; box-sizing: border-box; resize: none;
-      padding: 8px 10px; font: inherit; line-height: 1.4;
-      background: #1a1a1a; color: #ddd; border: 1px solid #333;
+      width: 100%; resize: none; padding: 8px 10px; font: inherit; line-height: 1.4;
+      background: #1a1a1a; color: var(--text); border: none;
+      border-top: 1px solid var(--border);
     }
     #say:disabled { opacity: 0.5; }
-    #controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #888; }
-    #mic { background: #1a1a1a; color: #ddd; border: 1px solid #333; padding: 4px 8px; cursor: pointer; }
-    #mic.on { border-color: #7fd08a; color: #7fd08a; }
+    #controls {
+      display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+      border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
+    }
+    #mic {
+      background: #1a1a1a; color: var(--text); border: 1px solid var(--border);
+      padding: 4px 8px; cursor: pointer;
+    }
+    #mic.on { border-color: var(--accent); color: var(--accent); }
     #controls label { cursor: pointer; user-select: none; }
     #vstatus { font-style: italic; }
   </style>
 </head>
 <body>
   <div class="row">
-    <div id="mol2d"></div>
-    <div id="mol3d"></div>
+    <div class="panel p2d">
+      <div class="panel-head">
+        <span>2D structure</span>
+        <span class="acts">
+          <button class="icon" id="copySmiles" aria-label="copy SMILES"
+            data-tip="copy SMILES">&#9095;</button>
+          <button class="icon" id="copyTrace"
+            aria-label="copy trace as CSV"
+            data-tip="copy trace as CSV (step, smiles, affinity)">&#8801;</button>
+        </span>
+      </div>
+      <div id="mol2d"></div>
+      <div class="trace" id="trace"></div>
+    </div>
+    <div class="panel p3d">
+      <div class="panel-head"><span>3D pocket</span></div>
+      <div id="mol3d"></div>
+    </div>
   </div>
-  <div id="chat">
+  <div class="panel chat">
+    <div class="panel-head"><span>assistant</span></div>
     <div id="feed"></div>
     <textarea id="say" rows="1"
       placeholder="add an isopropyl meta to the pyridine…"></textarea>
@@ -52,7 +146,7 @@
   </div>
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
-    let ligand = null, receptor = null;
+    let ligand = null, receptor = null, latest = null, shownSmiles = null;
     // Light-gray carbons with standard element colors, for the pocket residues.
     const elementBase =
       $3Dmol.elementColors.Jmol || $3Dmol.elementColors.defaultColors;
@@ -80,16 +174,111 @@
       }
       viewer.render();
     }
-    async function show(state) {
-      document.getElementById("mol2d").innerHTML = state.svg;
+    // Load one molecule's artifacts into the 2D + 3D viewers. Used both for a
+    // live update (over /ws) and for previewing a past step (a thumbnail click).
+    async function renderMolecule(art) {
+      document.getElementById("mol2d").innerHTML = art.svg;
       if (ligand) viewer.removeModel(ligand);
-      ligand = viewer.addModel(state.molblock, "mol");
+      ligand = viewer.addModel(art.molblock, "mol");
       ligand.setStyle({}, { stick: { colorscheme: "Jmol" } });
       await receptorReady;  // the protein may still be loading on first render
       await stylePocket();
+      viewer.resize();  // the 3D panel stretches to the 2D panel height
       viewer.zoomTo({ model: ligand.getID() });
       viewer.render();
+      shownSmiles = art.smiles;
+      markCurrent();
     }
+
+    // A live update from the session: refresh the filmstrip, then follow the
+    // current molecule (this overrides any past step the user was previewing).
+    async function show(state) {
+      latest = state;
+      syncTrace(state.trace || []);
+      await renderMolecule(state);
+    }
+
+    // Preview a past step. Read-only: it re-renders the viewers but does not
+    // touch the session, so the agent keeps editing the live current molecule.
+    async function loadStep(index) {
+      const res = await fetch(`/step/${index}`);
+      if (res.ok) await renderMolecule(await res.json());
+    }
+
+    // Trace filmstrip. One thumbnail per edit step; sync in place so scroll
+    // position and the un-changed thumbnails survive each update (incl. undo).
+    let traceSmiles = [], traceAff = [];
+    function thumbEl(entry, index) {
+      const el = document.createElement("div");
+      el.className = "thumb";
+      const aff = entry.affinity;
+      el.title = entry.smiles
+        + (aff == null ? "" : `  ·  Vinardo ${aff.toFixed(2)}`)
+        + "  (click to view)";
+      el.innerHTML = entry.svg + `<span class="step">${index}</span>`
+        + (aff == null ? "" : `<span class="aff">${aff.toFixed(1)}</span>`);
+      el.addEventListener("click", () => loadStep(index));
+      return el;
+    }
+    function syncTrace(trace) {
+      const strip = document.getElementById("trace");
+      while (traceSmiles.length > trace.length) {
+        strip.removeChild(strip.lastChild);
+        traceSmiles.pop();
+        traceAff.pop();
+      }
+      for (let i = 0; i < trace.length; i++) {
+        if (traceSmiles[i] === trace[i].smiles) continue;
+        const el = thumbEl(trace[i], i);
+        if (i < strip.children.length) strip.replaceChild(el, strip.children[i]);
+        else strip.appendChild(el);
+        traceSmiles[i] = trace[i].smiles;
+        traceAff[i] = trace[i].affinity;
+      }
+      markBest();
+      strip.scrollLeft = strip.scrollWidth;  // keep the newest step in view
+    }
+
+    // Flag the frame with the lowest (best) Vinardo score, if any is scored.
+    function markBest() {
+      const strip = document.getElementById("trace");
+      let best = Infinity, bestIndex = -1;
+      traceAff.forEach((a, i) => {
+        if (a != null && a < best) { best = a; bestIndex = i; }
+      });
+      for (let i = 0; i < strip.children.length; i++)
+        strip.children[i].classList.toggle("best", i === bestIndex);
+    }
+
+    // Highlight the frame whose molecule is on screen. After a revert the current
+    // molecule matches an earlier frame, so match by SMILES, not by position.
+    function markCurrent() {
+      const strip = document.getElementById("trace");
+      for (let i = 0; i < strip.children.length; i++)
+        strip.children[i].classList.toggle("current", traceSmiles[i] === shownSmiles);
+    }
+
+    // Copy SMILES / copy trace (one SMILES per line), with a brief flash.
+    function copyText(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.classList.add("flash");
+        setTimeout(() => btn.classList.remove("flash"), 600);
+      });
+    }
+    // The trace as CSV: one row per distinct molecule, with its Vinardo score
+    // (blank when there is no receptor). SMILES carry no commas, so no quoting.
+    function traceCsv(trace) {
+      const rows = trace.map((t, i) =>
+        `${i},${t.smiles},${t.affinity == null ? "" : t.affinity.toFixed(2)}`);
+      return ["step,smiles,affinity", ...rows].join("\n");
+    }
+    document.getElementById("copySmiles").addEventListener("click", (e) => {
+      if (shownSmiles) copyText(shownSmiles, e.currentTarget);
+    });
+    document.getElementById("copyTrace").addEventListener("click", (e) => {
+      if (latest) copyText(traceCsv(latest.trace || []), e.currentTarget);
+    });
+
     const receptorReady = loadReceptor();
     const ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onmessage = (e) => show(JSON.parse(e.data));
