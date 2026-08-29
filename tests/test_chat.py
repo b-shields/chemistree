@@ -11,6 +11,7 @@ from chemistree.app.chat import (
     EXPLORE,
     PRIMED,
     build_command,
+    interrupt_line,
     to_events,
     tool_phrase,
     user_message_line,
@@ -88,6 +89,15 @@ def test_user_message_line_encodes_a_turn():
     payload = json.loads(line)
     assert payload["type"] == "user"
     assert payload["message"]["content"][0]["text"] == "swap the chloro for fluoro"
+
+
+def test_interrupt_line_encodes_a_control_request():
+    line = interrupt_line()
+    assert line.endswith(b"\n")
+    payload = json.loads(line)
+    assert payload["type"] == "control_request"
+    assert payload["request"]["subtype"] == "interrupt"
+    assert payload["request_id"]  # a non-empty id, so the response can be matched
 
 
 def test_init_message_yields_nothing():

@@ -17,9 +17,11 @@ only carries the conversation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -259,6 +261,21 @@ def user_message_line(text: str) -> bytes:
     return (json.dumps(message) + "\n").encode()
 
 
+def interrupt_line() -> bytes:
+    """Encode an interrupt control request as one stream-json input line.
+
+    Returns:
+        The newline-terminated JSON line that aborts the in-flight turn when
+        written to the process's stdin, leaving the process warm for the next turn.
+    """
+    message = {
+        "type": "control_request",
+        "request_id": uuid.uuid4().hex,
+        "request": {"subtype": "interrupt"},
+    }
+    return (json.dumps(message) + "\n").encode()
+
+
 def tool_phrase(name: str) -> str:
     """Return a domain-language phrase for a tool, or the bare name if unknown.
 
@@ -371,6 +388,9 @@ async def _run_turn(
 ) -> bool:
     """Run one turn on the persistent process: send, stream events, end with ``done``.
 
+    A stop-watcher reads the socket in parallel so the user can interrupt a long
+    autonomous run; on a stop it aborts the turn but leaves the process warm.
+
     Args:
         socket: The chat WebSocket to push events to.
         proc: The running Claude process.
@@ -384,7 +404,38 @@ async def _run_turn(
     proc.stdin.write(user_message_line(message))
     await proc.stdin.drain()
 
-    saw_result = False
+    stopped = asyncio.Event()
+    watcher = asyncio.create_task(_watch_stop(socket, proc, stopped))
+    try:
+        saw_result = await _stream_turn(socket, proc, stopped)
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
+
+    if stopped.is_set():
+        await socket.send_json({"kind": "notice", "text": "stopped"})
+    elif not saw_result:  # stdout closed mid-turn: the process is gone
+        await socket.send_json({"kind": "error", "message": "the assistant stopped"})
+    await socket.send_json({"kind": "done"})
+    return saw_result
+
+
+async def _stream_turn(
+    socket: WebSocket, proc: asyncio.subprocess.Process, stopped: asyncio.Event
+) -> bool:
+    """Stream a turn's stdout to UI events until its result.
+
+    Args:
+        socket: The chat WebSocket to push events to.
+        proc: The running Claude process.
+        stopped: Set when the user asked to stop; suppresses the error event for
+            the aborted result so a deliberate stop reads as a stop, not a failure.
+
+    Returns:
+        True once a result line is seen, False if stdout closed first.
+    """
+    assert proc.stdout is not None
     async for raw in proc.stdout:
         line = raw.decode(errors="ignore").strip()
         if not line:
@@ -393,16 +444,46 @@ async def _run_turn(
             payload = json.loads(line)
         except ValueError:
             continue
+        if payload.get("type") == "result":
+            if not stopped.is_set():
+                for ui in to_events(payload):
+                    await socket.send_json(ui)
+            return True
         for ui in to_events(payload):
             await socket.send_json(ui)
-        if payload.get("type") == "result":
-            saw_result = True
-            break
+    return False
 
-    if not saw_result:  # stdout closed mid-turn: the process is gone
-        await socket.send_json({"kind": "error", "message": "the assistant stopped"})
-    await socket.send_json({"kind": "done"})
-    return saw_result
+
+async def _watch_stop(
+    socket: WebSocket, proc: asyncio.subprocess.Process, stopped: asyncio.Event
+) -> None:
+    """Read the socket during a turn and interrupt the process on a stop.
+
+    The turn's stdout loop does not read the socket, so this reads it in parallel.
+    On a ``{"type": "stop"}`` message it records the stop and sends the interrupt
+    control request; the in-flight turn then ends with a result.
+
+    Args:
+        socket: The chat WebSocket, read for a stop request.
+        proc: The running Claude process to interrupt.
+        stopped: Set here when a stop arrives, so the turn reports it cleanly.
+    """
+    try:
+        while True:
+            event = json.loads(await socket.receive_text())
+            if event.get("type") == "stop":
+                stopped.set()
+                await _interrupt(proc)
+    except (WebSocketDisconnect, ValueError):
+        pass
+
+
+async def _interrupt(proc: asyncio.subprocess.Process) -> None:
+    """Write the interrupt control request to the process's stdin."""
+    if proc.stdin is None:
+        return
+    proc.stdin.write(interrupt_line())
+    await proc.stdin.drain()
 
 
 async def _drain(stream: asyncio.StreamReader) -> None:

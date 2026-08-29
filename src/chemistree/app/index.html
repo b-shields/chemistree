@@ -110,6 +110,12 @@
     #mic.on { border-color: var(--accent); color: var(--accent); }
     #controls label { cursor: pointer; user-select: none; }
     #vstatus { font-style: italic; }
+    #stop {
+      margin-left: auto; background: #1a1a1a; color: var(--text);
+      border: 1px solid var(--border); padding: 4px 8px; cursor: pointer;
+    }
+    #stop:hover { border-color: #e06c6c; color: #e06c6c; }
+    #stop:disabled { opacity: 0.5; cursor: default; }
   </style>
 </head>
 <body>
@@ -142,6 +148,7 @@
       <button id="mic" title="hands-free voice: click to listen, click to stop">🎤</button>
       <label><input type="checkbox" id="autosend" checked /> auto-send</label>
       <span id="vstatus"></span>
+      <button id="stop" title="stop the assistant" hidden>&#9632; stop</button>
     </div>
   </div>
   <script>
@@ -294,14 +301,24 @@
       feed.appendChild(div);
       feed.scrollTop = feed.scrollHeight;
     }
+    const stop = document.getElementById("stop");
     const cws = new WebSocket(`ws://${location.host}/chat`);
     cws.onmessage = (e) => {
       const ev = JSON.parse(e.data);
       if (ev.kind === "text") addMsg("bot", ev.text);
       else if (ev.kind === "tool") addMsg("tool", "· " + ev.phrase + "…");
+      else if (ev.kind === "notice") addMsg("tool", ev.text);
       else if (ev.kind === "error") addMsg("err", ev.message);
-      else if (ev.kind === "done") { say.disabled = false; say.focus(); }
+      else if (ev.kind === "done") {
+        say.disabled = false; say.focus(); stop.hidden = true;
+      }
     };
+    // Stop the assistant mid-turn (e.g. cut an autonomous optimization short).
+    stop.addEventListener("click", () => {
+      cws.send(JSON.stringify({ type: "stop" }));
+      stop.disabled = true;
+      stop.textContent = "stopping…";
+    });
     function autoGrow() {
       say.style.height = "auto";
       say.style.height = Math.min(say.scrollHeight, 100) + "px";
@@ -314,6 +331,7 @@
       say.value = "";
       autoGrow();
       say.disabled = true;
+      stop.hidden = false; stop.disabled = false; stop.innerHTML = "&#9632; stop";
     }
     say.addEventListener("input", autoGrow);
     say.addEventListener("keydown", (e) => {
