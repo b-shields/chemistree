@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from chemistree.app import state, voice
 from chemistree.app.chat import chat_session
 from chemistree.app.commands import run_command
-from chemistree.app.render import render_state
+from chemistree.app.render import render_molecule, render_state
 
 app = FastAPI()
 _PAGE = (Path(__file__).parent / "index.html").read_text()
@@ -32,6 +32,22 @@ def index() -> str:
 def current() -> dict:
     """The current viewer state."""
     return render_state(state.get_session())
+
+
+@app.get("/step/{index}")
+def step(index: int) -> JSONResponse:
+    """Viewer artifacts for one molecule in the trace (a filmstrip thumbnail click).
+
+    Args:
+        index: Position in the session history, 0 = the starting molecule.
+
+    Returns:
+        The step's SMILES, 2D SVG, and 3D molblock, or a 404 error for a bad index.
+    """
+    history = state.get_session().history()
+    if not 0 <= index < len(history):
+        return JSONResponse({"error": "no such step"}, status_code=404)
+    return JSONResponse(render_molecule(history[index]))
 
 
 @app.get("/receptor", response_class=PlainTextResponse)

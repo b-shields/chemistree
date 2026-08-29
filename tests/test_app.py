@@ -43,6 +43,33 @@ def test_render_state_has_viewer_artifacts():
     assert "methyl" in state["describe"]
 
 
+def test_render_state_trace_mirrors_the_edit_history():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    ring_id = _node_id(session, lambda m: m.GetRingInfo().NumRings() > 0)
+    run_command(session, f"grow {ring_id} {_aromatic_h(session, ring_id)} methyl")
+    trace = render_state(session)["trace"]
+    assert [entry["smiles"] for entry in trace] == session.smiles_history
+    assert "<svg" in trace[-1]["svg"]  # a thumbnail per history step
+    assert trace[-1]["smiles"] == render_state(session)["smiles"]  # newest is current
+
+
+def test_trace_affinity_is_none_without_a_receptor():
+    trace = render_state(DesignSession("Cc1ccccc1", three_d=False))["trace"]
+    assert all(entry["affinity"] is None for entry in trace)
+
+
+def test_trace_carries_a_vinardo_number_per_step_with_a_receptor():
+    import pathlib
+
+    data = pathlib.Path(__file__).parent / "data" / "abl1"
+    ligand = Chem.MolFromMolFile(str(data / "reference.sdf"), removeHs=False)
+    receptor = Chem.MolFromPDBFile(
+        str(data / "receptor.pdb"), removeHs=False, sanitize=False
+    )
+    trace = render_state(DesignSession(ligand, receptor))["trace"]
+    assert [entry["affinity"] for entry in trace] == pytest.approx([-11.6], abs=0.2)
+
+
 def test_command_swap_uses_a_group_name():
     session = DesignSession("Cc1ccccc1", three_d=False)
     methyl_id = _node_id(session, lambda m: _heavy(m) == 1)
