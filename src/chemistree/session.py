@@ -53,6 +53,7 @@ class DesignSession:
         self.receptor = Receptor(receptor) if receptor is not None else None
         self._undo_stack: list[Callable[[], None]] = []
         self.smiles_history: list[str] = [self.smiles()]
+        self._history: list[Chem.Mol] = [self.molecule()]
 
     def _normalize_hydrogens(self) -> None:
         """Make every fragment's hydrogens explicit, so each atom has a stable id.
@@ -66,8 +67,26 @@ class DesignSession:
             node.history[0] = Fragment(explicit)
 
     def _record(self) -> None:
-        """Append the current SMILES to the history, in edit order."""
-        self.smiles_history.append(self.smiles())
+        """Record the current molecule, unless its SMILES was already seen.
+
+        A molecule reached again (e.g. by growing a group then removing it) is
+        not recorded twice, so the history holds only distinct molecules in the
+        order first seen. ``smiles_history`` and :meth:`history` stay parallel.
+        """
+        smiles = self.smiles()
+        if smiles in self.smiles_history:
+            return
+        self.smiles_history.append(smiles)
+        self._history.append(self.molecule())
+
+    def history(self) -> list[Chem.Mol]:
+        """The distinct molecules visited, in the order first seen.
+
+        Returns:
+            One molecule per step in ``smiles_history``, each a snapshot with the
+            conformer it had when recorded.
+        """
+        return list(self._history)
 
     def describe(self) -> str:
         """A compact markdown inventory of the current groups.
@@ -352,8 +371,25 @@ class DesignSession:
         findings.sort(key=lambda f: -f[0])
         return _clashes_report(findings)
 
-    def _pose_components(self) -> ScoreComponents | None:
-        """The current pose's Vinardo score, or None without a posed receptor.
+    def affinity(self, mol: Chem.Mol | None = None) -> float | None:
+        """Predicted Vinardo affinity of a pose, or None without a posed receptor.
+
+        Args:
+            mol: The molecule to score. Defaults to the current molecule, so the
+                trace can score each past step against the same receptor.
+
+        Returns:
+            The total Vinardo score (lower is a better fit) when the session has a
+            receptor and the ligand is posed in 3D; None otherwise.
+        """
+        components = self._pose_components(mol)
+        return None if components is None else components.total
+
+    def _pose_components(self, mol: Chem.Mol | None = None) -> ScoreComponents | None:
+        """A pose's Vinardo score, or None without a posed receptor.
+
+        Args:
+            mol: The molecule to score. Defaults to the current molecule.
 
         Returns:
             The score breakdown when the session has a receptor and the ligand is
@@ -364,7 +400,7 @@ class DesignSession:
         if not self.tree.nodes[0].current.mol.GetNumConformers():
             return None
         coords, typing = self.receptor.scoring_context()
-        return score_pose(self.molecule(), coords, typing)
+        return score_pose(self.molecule() if mol is None else mol, coords, typing)
 
     def _ligand_clashes(
         self, pose: _Pose, labels: dict[int, NodeAnnotation], tol: float

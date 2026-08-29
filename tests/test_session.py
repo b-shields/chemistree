@@ -79,6 +79,20 @@ def test_smiles_history_records_construction():
     assert session.smiles_history == [Chem.CanonSmiles("Cc1ccccc1")]
 
 
+def test_history_keeps_only_distinct_molecules():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    ring = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+    )
+    grown = session.grow(ring, _aromatic_h_on_ring(session, ring), "methyl")
+    session.remove(grown)  # revert to toluene; must not re-append a duplicate
+    assert session.smiles_history == [
+        Chem.CanonSmiles("Cc1ccccc1"),  # start
+        Chem.CanonSmiles("Cc1ccccc1C"),  # the xylene, kept as a distinct molecule
+    ]
+    assert len(session.history()) == len(session.smiles_history)
+
+
 def _aromatic_h_on_ring(session, node_id):
     """An id of a hydrogen on the aromatic ring of the given node."""
     mol = session.tree.node(node_id).current.mol
