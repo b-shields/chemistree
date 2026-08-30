@@ -8,6 +8,7 @@ the rest is relaxed with UFF.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable
 
 import numpy as np
@@ -564,7 +565,11 @@ def _relax(mol: Chem.Mol, fixed: Iterable[int]) -> None:
     ff = AllChem.UFFGetMoleculeForceField(mol)
     for idx in fixed:
         ff.AddFixedPoint(idx)
-    ff.Minimize(maxIts=1000)
+    # UFF's BFGS can throw "bad direction in linearSearch" when the pinned frame
+    # gives it a strained start (e.g. a fused-ring core hop). Keep the MCS-aligned
+    # geometry rather than crash; the caller's clash/rotate flow settles the strain.
+    with contextlib.suppress(RuntimeError):
+        ff.Minimize(maxIts=1000)
 
     for idx, iso in dummies:
         atom = mol.GetAtomWithIdx(idx)

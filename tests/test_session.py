@@ -599,6 +599,27 @@ def test_describe_omits_affinity_without_3d_coordinates():
     assert "Predicted affinity" not in session.describe()
 
 
+def test_core_hop_to_a_strained_ring_does_not_crash():
+    # Swapping the fused bicyclic scaffold (node 0) for a quinoline gives UFF a
+    # strained start that once crashed its optimizer; the guard keeps the aligned
+    # pose instead, so the swap completes and the molecule still scores.
+    session = _abl1_session()
+    session.swap(0, "[*]c1ccc2ccc([*])c([*])c2n1")
+    assert isinstance(session.affinity(), float)
+
+
+def test_swap_port_mismatch_error_names_the_ports_and_a_remove():
+    # Node 2 is the dichlorophenyl (3 ports: core + two chloros). A 1-port group
+    # cannot replace it; the error must name the ports and the remove-to-drop route.
+    session = _abl1_session()
+    with pytest.raises(ValueError) as caught:
+        session.swap(2, "[*]c1ccccc1")
+    message = str(caught.value)
+    assert "3 port(s)" in message
+    assert "chloro" in message
+    assert "remove 7" in message
+
+
 def _affinity(describe: str) -> float:
     """The numeric Vinardo affinity parsed from a describe overview."""
     line = next(ln for ln in describe.splitlines() if "Predicted affinity" in ln)

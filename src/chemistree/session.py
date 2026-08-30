@@ -132,13 +132,62 @@ class DesignSession:
     def swap(self, group_id: int, group: str | Chem.Mol) -> None:
         """Replace a group's fragment with a new group.
 
+        The new group must have the same number of ports as the group it replaces.
+        Use the group's own port labels (from :meth:`describe_group`) to control
+        which attachment sits where. To change a group and drop a substituent,
+        :meth:`remove` that substituent leaf first to free its port, then swap.
+
         Args:
             group_id: Id of the group to replace.
             group: A curated group name or a SMILES/Mol with matching ports.
+
+        Raises:
+            ValueError: If the group cannot be parsed, or its ports do not match
+                the group's; the message names the ports and how to proceed.
         """
         node = self.tree.node(group_id)
-        region = swap_region(node.current, _as_group(group))
+        try:
+            region = swap_region(node.current, _as_group(group))
+        except ValueError as error:
+            raise self._port_mismatch_error(group_id, error) from error
         self._apply(node, region)
+
+    def _port_mismatch_error(self, group_id: int, error: ValueError) -> ValueError:
+        """Enrich a port-mismatch swap error with the group's ports and next steps.
+
+        A non-port error (an unparseable group) is returned unchanged.
+
+        Args:
+            group_id: Id of the group being swapped.
+            error: The original error from :func:`swap_region`.
+
+        Returns:
+            A ``ValueError`` naming each port, its neighbour, and the two recovery
+            routes; or ``error`` itself when the failure is not about ports.
+        """
+        if "port" not in str(error):
+            return error
+        labels = {node.id: node for node in annotate(self.tree).nodes}
+        node = labels[group_id]
+        ports = ", ".join(
+            f"[{ref.port}*]->{ref.name or labels[ref.node_id].classification} "
+            f"[{ref.node_id}]"
+            for ref in sorted(node.neighbors, key=lambda ref: ref.port)
+        )
+        hint = (
+            f"{error}. This group has {len(node.ports)} port(s): {ports}. Provide a "
+            f"group with these port labels to keep every attachment"
+        )
+        leaves = sorted(
+            (ref for ref in node.neighbors if labels[ref.node_id].role == "leaf"),
+            key=lambda ref: ref.node_id,
+        )
+        if leaves:
+            hint += (
+                f", or remove a substituent leaf first (e.g. remove "
+                f"{leaves[0].node_id}) to free its port, then swap"
+            )
+        return ValueError(f"{hint}.")
 
     def grow(self, group_id: int, position_id: int, group: str | Chem.Mol) -> int:
         """Grow a group where a hydrogen is, following fragmentation rules.

@@ -117,6 +117,13 @@ def swap(node_id: int, group: str) -> str:
     ``[*]`` per attachment point ('[*]C1([*])COC1' for a 2-port oxetane linker);
     if a name is not recognized, pass a SMILES.
 
+    The new group must have the same number of ports as the group it replaces.
+    Use the group's own port labels (from ``describe_group``) so each attachment
+    keeps its place — bare ``[*]`` dummies are assigned in atom order and can put
+    substituents in the wrong spots. To change a group and drop a substituent,
+    ``remove`` that substituent leaf first (freeing its port), then swap the
+    lower-port group. A port-count error names the ports and how to proceed.
+
     When users ask to add a heterocycle they will typically use canonical
     numbering (atomic number priority around the ring) to refer to the H
     position(s) that should carry a port. Examples: (A) "add a 2-oxazole" means
