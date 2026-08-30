@@ -25,6 +25,7 @@ from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.naming import group_smiles
+from chemistree.properties import profile_markdown
 from chemistree.receptor import Receptor, Residue
 from chemistree.scoring import ScoreComponents, score_pose
 from chemistree.torsion import ScanResult, axis_matrix, scan_torsion, worst_overlap
@@ -93,14 +94,16 @@ class DesignSession:
 
         Lists each group's id, name, fragment, role, and connections. Call
         :meth:`describe_group` for a group's atom positions, rings, and topology.
-        When the session has a receptor and the ligand is posed in 3D, the current
-        predicted affinity is appended, so it updates with every edit.
+        A physicochemical profile and structure alerts are appended, and when the
+        session has a receptor and the ligand is posed in 3D the predicted
+        affinity is appended too, so all of it updates with every edit.
         """
         overview = describe_tree(self.tree)
+        profile = profile_markdown(self.molecule())
         components = self._pose_components()
         if components is None:
-            return overview
-        return f"{overview}\n\n{_affinity_line(components)}"
+            return f"{overview}\n\n{profile}"
+        return f"{overview}\n\n{profile}\n\n{_affinity_line(components)}"
 
     def describe_group(
         self, group_id: int, *, radius: int = 3, use_matrix: bool = False

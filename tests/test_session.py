@@ -54,6 +54,13 @@ def test_describe_is_a_compact_overview_without_per_group_detail():
     assert "**Topology:**" not in text
 
 
+def test_describe_carries_the_physchem_profile_and_alerts():
+    session = DesignSession("Cc1ccc(N)cc1", three_d=False)
+    text = session.describe()
+    assert "**Properties:**" in text
+    assert "**Structure alerts:**" in text
+
+
 def test_describe_group_shows_atom_map_topology_and_rings():
     session = DesignSession("Cc1ccccc1", three_d=False)
     ring = next(
