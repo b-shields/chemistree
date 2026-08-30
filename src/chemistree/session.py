@@ -10,8 +10,9 @@ what constructing from the edited molecule would give.
 
 from __future__ import annotations
 
+import contextlib
 import math
-from collections.abc import Callable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,12 +25,13 @@ from chemistree.describe import describe_group, describe_tree
 from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
+from chemistree.geometry import align_transform
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
 from chemistree.receptor import Receptor, Residue
 from chemistree.scoring import ScoreComponents, score_pose
 from chemistree.torsion import ScanResult, axis_matrix, scan_torsion, worst_overlap
-from chemistree.tree import Edge, FragmentNode, heavy_count
+from chemistree.tree import Edge, FragmentNode, FragmentTree, heavy_count
 
 
 class DesignSession:
@@ -52,7 +54,7 @@ class DesignSession:
         self.tree = fragment(prepare_molecule(molecule, three_d=three_d))
         self._normalize_hydrogens()
         self.receptor = Receptor(receptor) if receptor is not None else None
-        self._undo_stack: list[Callable[[], None]] = []
+        self._snapshots: list[FragmentTree] = []
         self.smiles_history: list[str] = [self.smiles()]
         self._history: list[Chem.Mol] = [self.molecule()]
 
@@ -146,11 +148,23 @@ class DesignSession:
                 the group's; the message names the ports and how to proceed.
         """
         node = self.tree.node(group_id)
+        branches = self._branches(node)
+        anchor_label = (
+            max(branches, key=lambda label: branches[label][1])
+            if len(node.current.ports) > 1
+            else None
+        )
+        posed = node.current.mol.GetNumConformers() > 0
         try:
-            region = swap_region(node.current, _as_group(group))
+            region = swap_region(
+                node.current, _as_group(group), anchor_label=anchor_label
+            )
         except ValueError as error:
             raise self._port_mismatch_error(group_id, error) from error
-        self._apply(node, region)
+        with self._edit():
+            sub_nodes = self._apply(node, region)
+            if anchor_label is not None and posed:
+                self._follow_arms(sub_nodes, branches, anchor_label)
 
     def _port_mismatch_error(self, group_id: int, error: ValueError) -> ValueError:
         """Enrich a port-mismatch swap error with the group's ports and next steps.
@@ -210,7 +224,8 @@ class DesignSession:
         """
         node = self.tree.node(group_id)
         region = grow_region(node.current, position_id, _as_group(group))
-        sub_nodes = self._apply(node, region)
+        with self._edit():
+            sub_nodes = self._apply(node, region)
         grown = max(sub_nodes, key=lambda n: n.id if n.id is not None else -1)
         assert grown.id is not None
         return grown.id
@@ -237,7 +252,8 @@ class DesignSession:
                 f"atom {position_id} is not a heavy atom; mutate changes a heavy atom"
             )
         region = mutate_region(node.current, position_id, _element_number(element))
-        self._apply(node, region)
+        with self._edit():
+            self._apply(node, region)
         return position_id
 
     def remove(self, group_id: int) -> None:
@@ -249,9 +265,9 @@ class DesignSession:
         Raises:
             ValueError: If the group is the root scaffold.
         """
-        removed = self.tree.remove_subtree(self.tree.node(group_id))
-        self._undo_stack.append(lambda: self.tree.restore_subtree(removed))
-        self._record()
+        node = self.tree.node(group_id)
+        with self._edit():
+            self.tree.remove_subtree(node)
 
     def distance(self, residue_id: str) -> str:
         """Report how close each group is to a receptor residue.
@@ -377,20 +393,12 @@ class DesignSession:
 
         result = self._scan(self._pose(), moving, axis_point, axis_dir, degrees, window)
         applied = result.window_best[0]
-        matrix = axis_matrix(axis_point, axis_dir, math.radians(applied))
-        for moving_node in moving:
-            rotated = Chem.Mol(moving_node.current.mol)
-            rdMolTransforms.TransformConformer(rotated.GetConformer(), matrix)
-            moving_node.push(Fragment(rotated))
-        turned = list(moving)
-
-        def undo() -> None:
-            """Revert each turned fragment to its pre-rotation snapshot."""
-            for moving_node in turned:
-                moving_node.undo()
-
-        self._undo_stack.append(undo)
-        self._record()
+        with self._edit():
+            matrix = axis_matrix(axis_point, axis_dir, math.radians(applied))
+            for moving_node in moving:
+                rotated = Chem.Mol(moving_node.current.mol)
+                rdMolTransforms.TransformConformer(rotated.GetConformer(), matrix)
+                moving_node.push(Fragment(rotated))
 
         label = self._label(group_id)
         return _rotation_report(group_id, label, degrees, applied, result)
@@ -557,6 +565,67 @@ class DesignSession:
                 stack.append(other)
         return seen
 
+    def _branches(self, node: FragmentNode) -> dict[int, tuple[set[FragmentNode], int]]:
+        """Each of a node's ports mapped to the branch beyond it and its size.
+
+        Args:
+            node: The node whose incident branches to measure.
+
+        Returns:
+            Port label -> (the nodes on that branch, its heavy-atom count).
+        """
+        result: dict[int, tuple[set[FragmentNode], int]] = {}
+        for edge, other in self.tree.neighbors(node):
+            branch = self._moving_side(other, edge)
+            size = sum(heavy_count(n.current.mol) for n in branch)
+            result[edge.label] = (branch, size)
+        return result
+
+    def _follow_arms(
+        self,
+        placed: list[FragmentNode],
+        branches: dict[int, tuple[set[FragmentNode], int]],
+        anchor_label: int,
+    ) -> None:
+        """Move each non-anchor branch to reconnect to the newly placed group.
+
+        The anchor branch is the fixed frame and does not move. Every other branch
+        is rigidly transformed so its attachment port lands on the placed group's
+        matching port, keeping the branch's own internal geometry.
+
+        Args:
+            placed: The sub-nodes the swapped region became.
+            branches: The swapped node's branches by port label (from _branches).
+            anchor_label: The pinned port; its branch stays put.
+        """
+        for label, (branch, _size) in branches.items():
+            if label == anchor_label:
+                continue
+            new_anchor, new_dummy = self._port_frame(placed, label)
+            # The arm's bonding atom sits a bond length out along the port, not at
+            # the placed dummy (an embedded dummy can land too close to its anchor).
+            direction = new_dummy - new_anchor
+            target = new_anchor + _BOND_LENGTH * direction / np.linalg.norm(direction)
+            arm_anchor, arm_dummy = self._port_frame(branch, label)
+            matrix = align_transform(
+                arm_anchor, arm_dummy - arm_anchor, target, new_anchor - target
+            )
+            for arm_node in branch:
+                moved = Chem.Mol(arm_node.current.mol)
+                rdMolTransforms.TransformConformer(moved.GetConformer(), matrix)
+                arm_node.push(Fragment(moved))
+
+    def _port_frame(
+        self, nodes: Iterable[FragmentNode], label: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The (anchor, dummy) coordinates of the port with ``label`` among nodes."""
+        node = next(n for n in nodes if any(p.label == label for p in n.current.ports))
+        port = next(p for p in node.current.ports if p.label == label)
+        conf = node.current.mol.GetConformer()
+        anchor = np.array(list(conf.GetAtomPosition(port.anchor_idx)))
+        dummy = np.array(list(conf.GetAtomPosition(port.dummy_idx)))
+        return anchor, dummy
+
     def _axis(
         self, node: FragmentNode, axis_edge: Edge
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -629,12 +698,32 @@ class DesignSession:
         return _name({n.id: n for n in annotate(self.tree).nodes}[group_id])
 
     def _apply(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
-        """Resplice an edited region into the tree, recording undo and history."""
-        sub_nodes, undo = self.tree.resplice(node, region_mol)
+        """Resplice an edited region into the tree; return the new sub-nodes.
+
+        Callers wrap this in :meth:`_edit`, which snapshots the tree for undo and
+        records the result.
+        """
+        sub_nodes, _ = self.tree.resplice(node, region_mol)
         self._normalize_new_hydrogens(sub_nodes)
-        self._undo_stack.append(undo)
-        self._record()
         return sub_nodes
+
+    @contextlib.contextmanager
+    def _edit(self) -> Iterator[None]:
+        """Run a tree edit atomically, snapshotting the tree for undo.
+
+        Snapshots the current tree before the edit. If the edit raises, the tree
+        is restored to that snapshot and the error re-raised; on success the new
+        molecule is recorded in the history.
+        """
+        snapshot = self.tree.copy()
+        self._snapshots.append(snapshot)
+        try:
+            yield
+        except Exception:
+            self._snapshots.pop()
+            self.tree = snapshot
+            raise
+        self._record()
 
     def _normalize_new_hydrogens(self, nodes: list[FragmentNode]) -> None:
         """Make hydrogens explicit on freshly spliced fragments, for stable ids."""
@@ -649,9 +738,9 @@ class DesignSession:
         Raises:
             ValueError: If there is nothing to undo.
         """
-        if not self._undo_stack:
+        if not self._snapshots:
             raise ValueError("nothing to undo")
-        self._undo_stack.pop()()
+        self.tree = self._snapshots.pop()
         self._record()
 
 
@@ -672,6 +761,9 @@ class _GroupDistances:
 # Overlaps below this (angstrom, past the tolerance) are incidental contact, not
 # a clash worth reporting.
 _CLASH_FLOOR = 0.1
+
+# Single-bond length (angstrom) used to reconnect a moved branch to a swapped group.
+_BOND_LENGTH = 1.5
 
 
 @dataclass(frozen=True)
@@ -816,7 +908,7 @@ def _element_number(element: str) -> int:
     if key in _ELEMENT_NAMES:
         return _ELEMENT_NAMES[key]
     try:
-        number = Chem.GetPeriodicTable().GetAtomicNumber(element.strip().capitalize())
+        number = Chem.GetPeriodicTable().GetAtomicNumber(element.strip())
     except RuntimeError as error:
         raise ValueError(f"unknown element: {element!r}") from error
     if number <= 0:

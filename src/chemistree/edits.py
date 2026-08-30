@@ -13,11 +13,11 @@ from collections.abc import Iterable
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdchem, rdFMCS, rdMolAlign
+from rdkit.Chem import AllChem, rdchem, rdFMCS, rdMolAlign, rdMolTransforms
 from rdkit.Geometry import Point3D
 
 from chemistree.fragment import Fragment
-from chemistree.geometry import chiral_volume
+from chemistree.geometry import align_transform, chiral_volume, rotation_between
 from chemistree.tree import FragmentNode
 
 _EMBED_SEED = 0xF00D  # fixed so placement is reproducible
@@ -42,17 +42,26 @@ def swap(node: FragmentNode, group: str | Chem.Mol) -> None:
     node.push(Fragment(swap_region(node.current, group)))
 
 
-def swap_region(old: Fragment, group: str | Chem.Mol) -> Chem.Mol:
+def swap_region(
+    old: Fragment, group: str | Chem.Mol, *, anchor_label: int | None = None
+) -> Chem.Mol:
     """Build the replacement mol for a swap, placed onto the old fragment's frame.
 
     This is ``swap`` without the tree side effect: it parses the group, matches its
     ports to the old fragment's labels, and (when the old fragment has 3D coords)
-    overlays it onto the retained frame. The caller decides how to graft the result
-    into the tree.
+    places it. The caller decides how to graft the result into the tree.
+
+    A single-port swap overlays the new group onto the old fragment's frame. A
+    multiport swap instead pins only ``anchor_label`` (the framework side) and lets
+    the other ports fall where the new geometry puts them; the caller then moves each
+    other branch to follow. Pinning every port to the old ring's port positions
+    collapses a differently shaped ring, so a multiport swap must pass an anchor.
 
     Args:
         old: Fragment being replaced, whose ports and frame are preserved.
         group: New group as a SMILES string or Mol, with one dummy per port.
+        anchor_label: For a multiport swap, the sole port to pin. None overlays by
+            the shared substructure (single-port swaps and mutate).
 
     Returns:
         The new group mol, port-labeled and (when applicable) placed in 3D.
@@ -60,11 +69,10 @@ def swap_region(old: Fragment, group: str | Chem.Mol) -> Chem.Mol:
     new = _parse_group(group)
     _assign_port_labels(old, new)
     if old.mol.GetNumConformers():
-        # A multiport ring swap must not pin the ring interior to the old frame:
-        # the MCS can match the new ring in a rotation that fights the ports, which
-        # collapses the placed geometry. Place such a swap by its ports alone. A
-        # single-port swap has no such conflict, so it keeps the shared-atom overlay.
-        new = _place(old, new, overlay_shared=len(old.ports) < 2)
+        if anchor_label is None:
+            new = _place(old, new)
+        else:
+            new = _place_anchored(old, new, anchor_label)
     return new
 
 
@@ -171,52 +179,12 @@ def _oriented_group(
     # then translate the anchor onto the hydrogen's position.
     src = coords[dummy] - coords[anchor]
     dst = heavy_pos - h_pos
-    rotation = _rotation_between(src, dst)
+    rotation = rotation_between(src, dst)
     coords = (coords - coords[anchor]) @ rotation.T + h_pos
 
     for i in range(g.GetNumAtoms()):
         conf.SetAtomPosition(i, Point3D(*coords[i]))
     return g
-
-
-def _rotation_between(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
-    """A 3x3 rotation matrix taking the direction of ``src`` onto that of ``dst``.
-
-    Uses Rodrigues' formula about the axis perpendicular to both vectors. Parallel
-    and antiparallel inputs are handled without dividing by zero.
-
-    Args:
-        src: Source direction vector (need not be unit length).
-        dst: Target direction vector (need not be unit length).
-
-    Returns:
-        The rotation matrix ``R`` with ``R @ unit(src) == unit(dst)``.
-    """
-    a = src / np.linalg.norm(src)
-    b = dst / np.linalg.norm(dst)
-    axis = np.cross(a, b)
-    sine = float(np.linalg.norm(axis))
-    cosine = float(np.dot(a, b))
-    if sine < 1e-8:
-        if cosine > 0:
-            return np.eye(3)
-        # Antiparallel: rotate 180 degrees about any axis perpendicular to ``a``.
-        perp = np.cross(a, [1.0, 0.0, 0.0])
-        if np.linalg.norm(perp) < 1e-8:
-            perp = np.cross(a, [0.0, 1.0, 0.0])
-        perp /= np.linalg.norm(perp)
-        flip: np.ndarray = 2.0 * np.outer(perp, perp) - np.eye(3)
-        return flip
-    axis /= sine
-    k = np.array(
-        [
-            [0.0, -axis[2], axis[1]],
-            [axis[2], 0.0, -axis[0]],
-            [-axis[1], axis[0], 0.0],
-        ]
-    )
-    rotation: np.ndarray = np.eye(3) + sine * k + (1.0 - cosine) * (k @ k)
-    return rotation
 
 
 def mutate_region(old: Fragment, atom: int, element: int) -> Chem.Mol:
@@ -372,16 +340,16 @@ def _assign_port_labels(old: Fragment, new: Chem.Mol) -> None:
     raise ValueError("group port labels must match the fragment's port labels")
 
 
-def _place(old: Fragment, new: Chem.Mol, *, overlay_shared: bool = True) -> Chem.Mol:
+def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     """Embed the new group and overlay it onto the old fragment's frame.
+
+    Pins the atoms shared with the old fragment (by MCS) and every port to their
+    old positions, holding the retained substructure in place. Used for single-port
+    swaps and mutate, where the ports agree and there is no shape-change conflict.
 
     Args:
         old: The fragment being replaced, with a 3D conformer.
         new: The new region to place.
-        overlay_shared: Pin the atoms shared with the old fragment (by MCS) to
-            their old positions, holding the retained ring in its frame. Turn this
-            off for a multiport ring swap, where the MCS mapping can fight the
-            ports; the new region is then placed by its ports alone.
 
     Returns:
         The new region with a conformer overlaid on the retained frame.
@@ -389,7 +357,7 @@ def _place(old: Fragment, new: Chem.Mol, *, overlay_shared: bool = True) -> Chem
     new = Chem.AddHs(new)
     AllChem.EmbedMolecule(new, randomSeed=_EMBED_SEED)
 
-    correspondence = _mcs_correspondence(old.mol, new) if overlay_shared else []
+    correspondence = _mcs_correspondence(old.mol, new)
     fixed, anchors = _fixed_atoms(old, new, correspondence)
     _free_inverted_centers(old, new, correspondence, anchors, fixed)
 
@@ -406,6 +374,60 @@ def _place(old: Fragment, new: Chem.Mol, *, overlay_shared: bool = True) -> Chem
         conf.SetAtomPosition(ni, old_conf.GetAtomPosition(oi))
 
     _relax(new, set(pinned))
+    return new
+
+
+def _place_anchored(old: Fragment, new: Chem.Mol, anchor_label: int) -> Chem.Mol:
+    """Place a multiport group onto the old fragment's pose, snapping its anchor.
+
+    The group is embedded once (clean geometry) and rigidly best-fit onto the old
+    fragment by its shared atoms and ports, so it sits where the old group sat (in
+    the pocket) without distortion. Nothing is pinned or relaxed — the failure mode
+    of forcing every port onto positions spaced for the old ring — so it keeps its
+    embedded shape. The anchor port's bond is then snapped exactly onto the old one
+    (a small rigid nudge) so the framework branch reconnects cleanly. Its other
+    ports fall where the rigid pose puts them; the caller moves each branch to
+    follow.
+
+    Args:
+        old: The fragment being replaced, with a 3D conformer.
+        new: The new region to place, port-labeled.
+        anchor_label: Port label to snap onto — the framework side, which does not
+            move.
+
+    Returns:
+        The new region with a conformer placed on the old fragment's pose.
+    """
+    new = Chem.AddHs(new)
+    AllChem.EmbedMolecule(new, randomSeed=_EMBED_SEED)
+
+    # Soft rigid best-fit onto the old fragment (shared atoms + every port); no
+    # pinning, so a differently shaped ring is placed, not collapsed.
+    correspondence = _mcs_correspondence(old.mol, new)
+    fixed, anchors = _fixed_atoms(old, new, correspondence)
+    _free_inverted_centers(old, new, correspondence, anchors, fixed)
+    rdMolAlign.AlignMol(new, old.mol, atomMap=[(ni, oi) for ni, oi in fixed.items()])
+
+    conf = new.GetConformer()
+    dummy = next(
+        a
+        for a in new.GetAtoms()
+        if a.GetAtomicNum() == 0 and a.GetIsotope() == anchor_label
+    )
+    anchor = dummy.GetNeighbors()[0].GetIdx()
+    new_anchor = np.array(list(conf.GetAtomPosition(anchor)))
+    new_dummy = np.array(list(conf.GetAtomPosition(dummy.GetIdx())))
+
+    port = next(p for p in old.ports if p.label == anchor_label)
+    old_conf = old.mol.GetConformer()
+    old_anchor = np.array(list(old_conf.GetAtomPosition(port.anchor_idx)))
+    old_dummy = np.array(list(old_conf.GetAtomPosition(port.dummy_idx)))
+
+    # Snap the anchor port's bond exactly onto the old one (a small rigid nudge).
+    matrix = align_transform(
+        new_anchor, new_dummy - new_anchor, old_anchor, old_dummy - old_anchor
+    )
+    rdMolTransforms.TransformConformer(conf, matrix)
     return new
 
 

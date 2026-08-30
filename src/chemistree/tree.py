@@ -109,6 +109,33 @@ class FragmentTree:
         """
         return self._by_id[node_id]
 
+    def copy(self) -> FragmentTree:
+        """An independent copy of the tree, for snapshot-based undo.
+
+        Node wrappers and edges are copied and remapped to the copies; the
+        immutable ``Fragment`` snapshots are shared. Node ids and the id counter
+        are preserved, so a restored snapshot keeps working with existing ids.
+
+        Returns:
+            A new tree that shares no mutable state with this one.
+        """
+        clones: dict[FragmentNode, FragmentNode] = {}
+        for node in self.nodes:
+            clone = FragmentNode(node.current)
+            clone.history = list(node.history)
+            clone.id = node.id
+            clones[node] = clone
+        # Bypass __post_init__, which would reassign ids from zero.
+        new = FragmentTree.__new__(FragmentTree)
+        new.nodes = [clones[node] for node in self.nodes]
+        new.edges = [
+            Edge(edge.label, clones[edge.node_a], clones[edge.node_b], edge.bond_type)
+            for edge in self.edges
+        ]
+        new._next_id = self._next_id
+        new._by_id = {node_id: clones[node] for node_id, node in self._by_id.items()}
+        return new
+
     def neighbors(self, node: FragmentNode) -> list[tuple[Edge, FragmentNode]]:
         """Edges incident to a node, paired with the node on the other side.
 

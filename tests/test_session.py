@@ -610,9 +610,9 @@ def test_core_hop_to_a_strained_ring_does_not_crash():
 
 def test_multiport_ring_swap_keeps_a_sane_ring_geometry():
     # Swapping a 3-port ring for a different ring once collapsed atoms (a 0.0 A
-    # bond) because the MCS overlay fought the ports; placing a multiport swap by
-    # its ports alone keeps the ring intact. Every heavy-heavy ring bond must be a
-    # real bond length, not collapsed or stretched.
+    # bond) because the placement pinned every port to the old ring's positions;
+    # anchoring one port and letting the ring keep its embedded shape keeps it
+    # intact. Every heavy-heavy ring bond must be a real length, not collapsed.
     session = _abl1_session()
     session.swap(2, "[5*]c1nc([7*])c([6*])cc1")
     frag = session.tree.node(2).current.mol
@@ -623,6 +623,40 @@ def test_multiport_ring_swap_keeps_a_sane_ring_geometry():
             p = np.array(list(conf.GetAtomPosition(a.GetIdx())))
             q = np.array(list(conf.GetAtomPosition(b.GetIdx())))
             assert 1.1 < float(np.linalg.norm(p - q)) < 1.8
+
+
+def _heavy_bonds(mol: Chem.Mol) -> list[float]:
+    """Every heavy-heavy bond length in a molecule."""
+    conf = mol.GetConformer()
+    lengths = []
+    for bond in mol.GetBonds():
+        a, b = bond.GetBeginAtom(), bond.GetEndAtom()
+        if a.GetAtomicNum() > 1 and b.GetAtomicNum() > 1:
+            p = np.array(list(conf.GetAtomPosition(a.GetIdx())))
+            q = np.array(list(conf.GetAtomPosition(b.GetIdx())))
+            lengths.append(float(np.linalg.norm(p - q)))
+    return lengths
+
+
+def test_shape_changing_swap_reconnects_substituents_with_sane_bonds():
+    # Swapping the methyl/fluoro/anilino benzene for a smaller oxazole changes the
+    # ring size; the substituent branches must follow and reconnect at real bond
+    # lengths across the whole molecule, not collapse (0 A) or stretch.
+    session = _abl1_session()
+    session.swap(1, "[*]c1nc([*])oc1[*]")
+    assert all(1.1 < d < 1.85 for d in _heavy_bonds(session.molecule()))
+
+
+def test_core_hop_moves_arms_rigidly_and_keeps_valid_geometry():
+    # Core-hopping the fused scaffold (node 0) moves each arm to follow the new
+    # core. Every bond stays a real length, and a moved arm (the dichlorophenyl,
+    # node 2) keeps its own internal geometry — it moves as a rigid body.
+    session = _abl1_session()
+    before = sorted(_heavy_bonds(session.tree.node(2).current.mol))
+    session.swap(0, "[*]c1ccc2ccc([*])c([*])c2n1")
+    assert all(1.1 < d < 1.85 for d in _heavy_bonds(session.molecule()))
+    after = sorted(_heavy_bonds(session.tree.node(2).current.mol))
+    assert np.allclose(before, after)
 
 
 def test_swap_port_mismatch_error_names_the_ports_and_a_remove():
