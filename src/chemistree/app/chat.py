@@ -23,14 +23,19 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 _log = logging.getLogger(__name__)
 
-# The Claude binary and model. Override the binary for a non-default install.
+# The Claude binary and default model. Override the binary for a non-default
+# install; the model is chosen per run by the ``--model`` CLI flag.
 _CLAUDE_BIN = os.environ.get("CHEMISTREE_CLAUDE_BIN", "claude")
-_MODEL = "haiku"
+DEFAULT_MODEL = "haiku"
+# The editable prompt template, read once. It carries {tools} and {primed_note}
+# placeholders that _system_prompt fills per mode.
+_PROMPT_TEMPLATE = (Path(__file__).parent / "system_prompt.md").read_text()
 # Env var the chat driver sets so the MCP server (a child of the claude process)
 # attaches the refreshed fragment listing to edit results. app/mcp.py reads the
 # same name.
@@ -68,6 +73,9 @@ _BLOCKED_TOOLS = ",".join(
 def _system_prompt(tools: str, primed_note: str = "") -> str:
     """Build the agent's system prompt naming the tools a mode exposes.
 
+    Fills the ``system_prompt.md`` template so the prompt text stays editable in
+    plain markdown, not inline in this module.
+
     Args:
         tools: Comma-separated tool names the mode exposes, named in the prompt.
         primed_note: Extra guidance appended for the primed mode.
@@ -75,66 +83,7 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
     Returns:
         The full ``--append-system-prompt`` text.
     """
-    return (
-        f"You are a medicinal chemist talking through a structure with a colleague "
-        f"at the bench. You edit one molecule in a live design session, using only "
-        f"the chemistree tools ({tools}) to inspect and change it. A group can be a "
-        f"common name (isopropyl) or a SMILES with one dummy [*] per attachment "
-        f"point ([*]C1([*])COC1 for a 2-port oxetane linker); if a name is not "
-        f"recognized, pass a SMILES. Group ids come from the group listing; before "
-        f"grow or mutate, call describe_group(id) to get the atom position ids. "
-        f"When a request names a residue (near/closest to it), call distance to see "
-        f"which group is closest, or contacts to map the whole binding site, before "
-        f"editing. After adding or changing a group, call clashes to check the new "
-        f"pose; if a group clashes with another group or the protein, tell the user "
-        f"and offer to rotate it to relieve the clash, and rotate only once they "
-        f"agree (rotate turns a group about its attachment bond, carrying its "
-        f"substituents, and settles it to the least-clashing angle near what you "
-        f"ask).\n\n"
-        f"When a protein is loaded, the group listing ends with a predicted affinity "
-        f"(Vinardo; more negative is a better fit) that updates after every edit. "
-        f"Read it to judge whether a change helped or hurt binding, and say so in "
-        f"plain terms rather than quoting the number unless the user asks. The "
-        f"Vinardo score reflects only protein-ligand interactions, not strain "
-        f"inside the molecule, so a better number does not mean a sound pose: use "
-        f"clashes to find and fix any group-group clash within the molecule, and "
-        f"avoid edits that introduce one.\n\n"
-        f"When the user asks you to improve or optimize the binding affinity, "
-        f"work autonomously: make a run of edits without pausing for approval, "
-        f"and report back at the end with what you tried and what you kept. "
-        f"After each edit, read the predicted affinity; keep a change that "
-        f"lowers it and undo one that raises it or leaves it flat, so the "
-        f"molecule only moves in a good direction. Follow this plan, smallest "
-        f"changes first, and stop once the gains dry up: (1) minimal edits — "
-        f"walk a methyl, a chloro, and a ring carbon-to-nitrogen substitution "
-        f"around the open positions, one at a time; (2) pocket-guided edits — "
-        f"call contacts (or distance) to read the residues around each group, "
-        f"then choose substitutions that suit them, an H-bond donor or acceptor "
-        f"reaching a polar side chain, a lipophilic group into a hydrophobic "
-        f"wall; (3) larger edits — swap a whole ring for a different "
-        f"heterocycle; (4) core hopping only as a last resort — replace the "
-        f"scaffold the substituents hang on. After any edit that adds more than "
-        f"one heavy atom, call clashes; if the new group clashes with another "
-        f"group or the protein, rotate it yourself to relieve the strain before "
-        f"you judge the affinity — a single-atom change (a methyl, a halogen, a "
-        f"mutation) needs no torsion check. Weigh every change as a medicinal "
-        f"chemist, not by the score alone: avoid phenols, free anilines, acids, "
-        f"> 2 Cl, >2 F, >1 CF3, keep amines that would be cationic at neutral pH "
-        f"where it can make an ionic contact and added in the appropriate [N+] group. "
-        f"Never make an amine attached to an aromatic group or carbonyl cationic. "
-        f"Drop a change that scores better but is chemically unwise, and say why.\n\n"
-        f"The ids, atom positions, and tables the tools return are your private "
-        f"scaffolding for addressing atoms — never repeat them to the user. Talk the "
-        f"way a chemist talks: name each group by what it is (the dichlorophenyl, "
-        f"the pyrimidine core, the para hydroxyl), describe positions as "
-        f"ortho/meta/para or by the atoms involved, and write in flowing sentences, "
-        f"not bracketed ids, atom numbers, or copied tables. Read the SMILES and "
-        f"atom map to recognize the real chemistry rather than leaning on the tools' "
-        f"generic labels. Save headers and bullet lists for when the user asks for a "
-        f"breakdown; otherwise reply in a short, natural paragraph — one sentence to "
-        f"confirm an edit, a few plain sentences when asked to explain. Never read, "
-        f"write, or run files or shell commands.{primed_note}"
-    )
+    return _PROMPT_TEMPLATE.format(tools=tools, primed_note=primed_note)
 
 
 _SYSTEM_PROMPT = _system_prompt(
@@ -201,7 +150,9 @@ _TOOL_PHRASES = {
 }
 
 
-def build_command(mode: ChatMode, context: str = "") -> list[str]:
+def build_command(
+    mode: ChatMode, context: str = "", model: str = DEFAULT_MODEL
+) -> list[str]:
     """Build the ``claude`` argv for the persistent streaming session.
 
     The process is spawned once and reused for every turn. It reads user
@@ -212,6 +163,7 @@ def build_command(mode: ChatMode, context: str = "") -> list[str]:
         mode: The chat mode, which chooses the system prompt.
         context: The current fragment listing to seed. Used only when the mode
             primes state; ignored otherwise.
+        model: The Claude model alias to run (haiku, sonnet, opus, or a full id).
 
     Returns:
         The argument list to spawn.
@@ -232,7 +184,7 @@ def build_command(mode: ChatMode, context: str = "") -> list[str]:
         "stream-json",
         "--verbose",
         "--model",
-        _MODEL,
+        model,
         "--append-system-prompt",
         prompt,
         "--mcp-config",
@@ -343,7 +295,10 @@ def _short_tool_name(name: str) -> str:
 
 
 async def chat_session(
-    socket: WebSocket, mode: ChatMode = DEFAULT_MODE, context: str = ""
+    socket: WebSocket,
+    mode: ChatMode = DEFAULT_MODE,
+    context: str = "",
+    model: str = DEFAULT_MODEL,
 ) -> None:
     """Bridge a browser chat panel to one persistent Claude Code process.
 
@@ -355,13 +310,14 @@ async def chat_session(
         socket: The accepted WebSocket.
         mode: The chat mode, which chooses the system prompt and whether to prime.
         context: The current fragment listing to seed when the mode primes.
+        model: The Claude model alias to run.
     """
     await socket.accept()
     # In the primed mode the MCP server must attach the listing to edit results;
     # it is a child of this process, so pass the flag down through the environment.
     env = {**os.environ, _PRIME_ENV: "1"} if mode.prime_context else None
     proc = await asyncio.create_subprocess_exec(
-        *build_command(mode, context),
+        *build_command(mode, context, model),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
