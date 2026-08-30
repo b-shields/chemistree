@@ -28,6 +28,11 @@ def test_build_command_runs_a_persistent_stream_session():
     assert "--resume" not in cmd
 
 
+def test_build_command_runs_the_requested_model():
+    cmd = build_command(EXPLORE, model="sonnet")
+    assert cmd[cmd.index("--model") + 1] == "sonnet"
+
+
 def test_build_command_allows_only_mcp_tools():
     cmd = build_command(EXPLORE)
     assert cmd[cmd.index("--allowedTools") + 1] == "mcp__chemistree"

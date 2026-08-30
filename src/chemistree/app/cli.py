@@ -13,7 +13,10 @@ import uvicorn
 from rdkit import Chem
 
 from chemistree.app import state
-from chemistree.app.chat import DEFAULT_MODE, MODES
+from chemistree.app.chat import DEFAULT_MODE, DEFAULT_MODEL, MODES
+
+# Model aliases the ``--model`` flag offers, cheapest and fastest first.
+MODEL_CHOICES = ("haiku", "sonnet", "opus")
 
 
 def main() -> None:
@@ -30,6 +33,13 @@ def main() -> None:
         help="'primed' seeds the agent with fragments (snappier); 'explore' lets "
         "it look them up (its reasoning is visible).",
     )
+    parser.add_argument(
+        "--model",
+        choices=MODEL_CHOICES,
+        default=DEFAULT_MODEL,
+        help="Claude model the chat agent runs: 'haiku' (default, fastest), "
+        "'sonnet' (balanced), or 'opus' (most capable).",
+    )
     args = parser.parse_args()
 
     ligand = Chem.MolFromMolFile(args.molecule, removeHs=False)
@@ -41,7 +51,7 @@ def main() -> None:
         if receptor is None:
             parser.error(f"could not read receptor: {args.receptor}")
 
-    state.configure(ligand, receptor, mode=MODES[args.chat_mode])
+    state.configure(ligand, receptor, mode=MODES[args.chat_mode], model=args.model)
 
     from chemistree.app.server import app
 

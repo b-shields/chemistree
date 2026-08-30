@@ -87,7 +87,7 @@ async def chat(socket: WebSocket) -> None:
     mode = state.get_mode()
     # Seed the current fragments (at connect, so a reload after edits is current).
     context = state.get_session().describe() if mode.prime_context else ""
-    await chat_session(socket, mode, context)
+    await chat_session(socket, mode, context, state.get_model())
 
 
 @app.websocket("/voice")
