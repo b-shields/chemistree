@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "chemistree"
 version = "0.1.0"
-description = "Natural-language editing of molecular structures via tree-based fragment representation"
+description = "Natural-language editing of molecular structures via a tree-based fragment representation"
 authors = ["Benjamin J. Shields"]
 readme = "README.md"
 packages = [{include = "chemistree", from = "src"}]
