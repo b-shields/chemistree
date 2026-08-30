@@ -608,6 +608,23 @@ def test_core_hop_to_a_strained_ring_does_not_crash():
     assert isinstance(session.affinity(), float)
 
 
+def test_multiport_ring_swap_keeps_a_sane_ring_geometry():
+    # Swapping a 3-port ring for a different ring once collapsed atoms (a 0.0 A
+    # bond) because the MCS overlay fought the ports; placing a multiport swap by
+    # its ports alone keeps the ring intact. Every heavy-heavy ring bond must be a
+    # real bond length, not collapsed or stretched.
+    session = _abl1_session()
+    session.swap(2, "[5*]c1nc([7*])c([6*])cc1")
+    frag = session.tree.node(2).current.mol
+    conf = frag.GetConformer()
+    for bond in frag.GetBonds():
+        a, b = bond.GetBeginAtom(), bond.GetEndAtom()
+        if a.GetAtomicNum() > 1 and b.GetAtomicNum() > 1:
+            p = np.array(list(conf.GetAtomPosition(a.GetIdx())))
+            q = np.array(list(conf.GetAtomPosition(b.GetIdx())))
+            assert 1.1 < float(np.linalg.norm(p - q)) < 1.8
+
+
 def test_swap_port_mismatch_error_names_the_ports_and_a_remove():
     # Node 2 is the dichlorophenyl (3 ports: core + two chloros). A 1-port group
     # cannot replace it; the error must name the ports and the remove-to-drop route.

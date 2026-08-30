@@ -60,7 +60,11 @@ def swap_region(old: Fragment, group: str | Chem.Mol) -> Chem.Mol:
     new = _parse_group(group)
     _assign_port_labels(old, new)
     if old.mol.GetNumConformers():
-        new = _place(old, new)
+        # A multiport ring swap must not pin the ring interior to the old frame:
+        # the MCS can match the new ring in a rotation that fights the ports, which
+        # collapses the placed geometry. Place such a swap by its ports alone. A
+        # single-port swap has no such conflict, so it keeps the shared-atom overlay.
+        new = _place(old, new, overlay_shared=len(old.ports) < 2)
     return new
 
 
@@ -368,12 +372,16 @@ def _assign_port_labels(old: Fragment, new: Chem.Mol) -> None:
     raise ValueError("group port labels must match the fragment's port labels")
 
 
-def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
+def _place(old: Fragment, new: Chem.Mol, *, overlay_shared: bool = True) -> Chem.Mol:
     """Embed the new group and overlay it onto the old fragment's frame.
 
     Args:
         old: The fragment being replaced, with a 3D conformer.
         new: The new region to place.
+        overlay_shared: Pin the atoms shared with the old fragment (by MCS) to
+            their old positions, holding the retained ring in its frame. Turn this
+            off for a multiport ring swap, where the MCS mapping can fight the
+            ports; the new region is then placed by its ports alone.
 
     Returns:
         The new region with a conformer overlaid on the retained frame.
@@ -381,7 +389,7 @@ def _place(old: Fragment, new: Chem.Mol) -> Chem.Mol:
     new = Chem.AddHs(new)
     AllChem.EmbedMolecule(new, randomSeed=_EMBED_SEED)
 
-    correspondence = _mcs_correspondence(old.mol, new)
+    correspondence = _mcs_correspondence(old.mol, new) if overlay_shared else []
     fixed, anchors = _fixed_atoms(old, new, correspondence)
     _free_inverted_centers(old, new, correspondence, anchors, fixed)
 
