@@ -117,6 +117,14 @@ def swap(node_id: int, group: str) -> str:
     ``[*]`` per attachment point ('[*]C1([*])COC1' for a 2-port oxetane linker);
     if a name is not recognized, pass a SMILES.
 
+    When users ask to add a heterocycle they will typically use canonical
+    numbering (atomic number priority around the ring) to refer to the H
+    position(s) that should carry a port. Examples: (A) "add a 2-oxazole" means
+    `c1cnc([*])o1`. (B) Suppose there is a benzene with 2 ports
+    (`c1([1*])cc([2*])ccc1`) where `[1*]F` and `[2*]C` are attached groups; then
+    if a user says "swap the F, Me phenyl to a 2,5 thiazole" it means
+    `c1([2*])cnc([1*])s1`.
+
     Args:
         node_id: Group whose fragment is replaced (from ``describe``).
         group: A common group name or a SMILES with a ``[*]`` per port.

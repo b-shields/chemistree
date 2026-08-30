@@ -83,7 +83,7 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
     Returns:
         The full ``--append-system-prompt`` text.
     """
-    return _PROMPT_TEMPLATE.format(tools=tools, primed_note=primed_note)
+    return _PROMPT_TEMPLATE.format(tools=tools, primed_note=primed_note).rstrip()
 
 
 _SYSTEM_PROMPT = _system_prompt(
@@ -97,7 +97,8 @@ _PRIMED_PROMPT = _system_prompt(
     "describe_group, smiles, swap, grow, mutate, remove, rotate, undo, distance, "
     "contacts, clashes",
     primed_note=(
-        " You are given the current group listing, refreshed after every edit; use "
+        "# Session note\n\n"
+        "You are given the current group listing, refreshed after every edit; use "
         "those ids directly and call describe_group(id) for atom positions."
     ),
 )
