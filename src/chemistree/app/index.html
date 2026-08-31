@@ -37,7 +37,7 @@
       background: transparent; border: 1px solid transparent; color: var(--muted);
       cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 6px;
     }
-    .icon:hover { color: var(--text); border-color: var(--border); }
+    .icon:hover { color: var(--text); }
     .icon.flash { color: var(--accent); border-color: var(--accent); }
     /* Immediate hover label naming each button's function. */
     .icon::after {
@@ -49,6 +49,7 @@
     }
     .icon.flash::after { content: "copied"; }
     .icon:hover::after { opacity: 1; }
+    .icon.active { color: var(--accent); }
 
     .panel.p2d { width: 380px; }
     #mol2d { width: 378px; height: 380px; background: var(--bg); }
@@ -94,6 +95,7 @@
     .msg.tool { color: var(--muted); font-style: italic; }
     .msg.think { color: var(--muted); font-style: italic; opacity: .65;
       font-size: .9em; border-left: 2px solid var(--border); padding-left: 8px; }
+    #feed.hide-think .msg.think { display: none; }
     .msg.err { color: #e06c6c; }
     #say {
       width: 100%; resize: none; padding: 8px 10px; font: inherit; line-height: 1.4;
@@ -106,9 +108,10 @@
       border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
     }
     #mic {
-      background: #1a1a1a; color: var(--text); border: 1px solid var(--border);
+      background: transparent; color: var(--muted); border: 1px solid transparent;
       padding: 4px 8px; cursor: pointer;
     }
+    #mic:hover { color: var(--text); }
     #mic.on { border-color: var(--accent); color: var(--accent); }
     #controls label { cursor: pointer; user-select: none; }
     #vstatus { font-style: italic; }
@@ -148,6 +151,8 @@
       placeholder="add an isopropyl meta to the pyridine…"></textarea>
     <div id="controls">
       <button id="mic" title="hands-free voice: click to listen, click to stop">🎤</button>
+      <button class="icon" id="reasoning" data-tip="reasoning">💭</button>
+      <button class="icon" id="copyChat" data-tip="copy" aria-label="copy chat">&#10697;</button>
       <label><input type="checkbox" id="autosend" checked /> auto-send</label>
       <span id="vstatus"></span>
       <button id="stop" title="stop the assistant" hidden>&#9632; stop</button>
@@ -303,6 +308,28 @@
       feed.appendChild(div);
       feed.scrollTop = feed.scrollHeight;
     }
+
+    // Toggle the dimmed reasoning stream; the choice persists across reloads.
+    const reasoningBtn = document.getElementById("reasoning");
+    let showThink = true;
+    try { showThink = localStorage.getItem("showThink") !== "0"; } catch (e) {}
+    function applyThink() {
+      feed.classList.toggle("hide-think", !showThink);
+      reasoningBtn.classList.toggle("active", showThink);
+    }
+    applyThink();
+    reasoningBtn.addEventListener("click", () => {
+      showThink = !showThink;
+      try { localStorage.setItem("showThink", showThink ? "1" : "0"); } catch (e) {}
+      applyThink();
+    });
+    // Copy the whole conversation, one message per line.
+    document.getElementById("copyChat").addEventListener("click", (e) => {
+      const text = [...feed.querySelectorAll(".msg")]
+        .map((m) => m.textContent).join("\n");
+      if (text) copyText(text, e.currentTarget);
+    });
+
     const stop = document.getElementById("stop");
     const cws = new WebSocket(`ws://${location.host}/chat`);
     cws.onmessage = (e) => {
