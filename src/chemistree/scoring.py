@@ -271,19 +271,233 @@ def score_pose(
     )
 
 
+# Rotatable single bond (not terminal, not triple-adjacent, not in a ring); amide
+# and thioamide bonds are kept rigid. Both are cmxflow's get_rotatable_bonds SMARTS.
+_ROTATABLE_SMARTS = "[!$(*#*)&!D1]-&!@[!$(*#*)&!D1]"
+_AMIDE_SMARTS = "[#7;X3]-[#6;X3]=[O,S]"
+
+
+def _rigid_fragments(mol: Chem.Mol) -> np.ndarray:
+    """Label each heavy atom by its rigid fragment.
+
+    Cutting the molecule at its rotatable bonds splits it into rigid fragments:
+    atoms in different fragments can move relative to each other, atoms in the
+    same fragment cannot. Amide and thioamide bonds are kept rigid. This is
+    cmxflow's rigid-fragment partition, used to select intramolecular pairs.
+
+    Args:
+        mol: Heavy-atom molecule.
+
+    Returns:
+        (N,) array of fragment labels (union-find roots), one per atom.
+    """
+    rotatable = Chem.MolFromSmarts(_ROTATABLE_SMARTS)
+    amide = Chem.MolFromSmarts(_AMIDE_SMARTS)
+    amide_bonds = {frozenset(m[:2]) for m in mol.GetSubstructMatches(amide)}
+    rot_bonds = {
+        frozenset((j, k))
+        for j, k in mol.GetSubstructMatches(rotatable)
+        if frozenset((j, k)) not in amide_bonds
+    }
+
+    parent = list(range(mol.GetNumAtoms()))
+
+    def find(x: int) -> int:
+        """The union-find root of atom ``x``, with path compression."""
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for bond in mol.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if frozenset((a, b)) in rot_bonds:
+            continue
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    return np.array([find(i) for i in range(mol.GetNumAtoms())])
+
+
+def score_intramolecular(
+    ligand: Chem.Mol, params: EmpiricalParams | None = None
+) -> ScoreComponents:
+    """Score a ligand's internal Vinardo energy over its non-bonded pairs.
+
+    The same four Vinardo terms as the intermolecular score, summed over the
+    ligand's own atom pairs that (1) are at least three bonds apart (1-4 and
+    beyond) and (2) lie in different rigid fragments, so they move relative to
+    each other under some torsion. This is cmxflow's (and Vina's) intramolecular
+    pair selection. It is not a binding score: it measures internal strain and
+    guides a pose settle, while the reported affinity stays intermolecular only.
+
+    Args:
+        ligand: The ligand molecule with a 3D conformer. Hydrogens are stripped.
+        params: Scoring weights and cutoffs; the smina Vinardo defaults if None.
+
+    Returns:
+        The four term sums, whose ``total`` is the internal energy and whose
+        ``repulsion`` is the internal clash strain.
+
+    Raises:
+        ValueError: If the ligand has no 3D conformer.
+    """
+    if params is None:
+        params = EmpiricalParams()
+    heavy = Chem.RemoveAllHs(ligand)
+    if heavy.GetNumConformers() == 0:
+        raise ValueError("ligand has no 3D conformer")
+    coords = heavy.GetConformer().GetPositions()
+    typing = atom_typing(heavy)
+    valid = intramolecular_mask(heavy)
+
+    diff = coords[:, None, :] - coords[None, :, :]
+    d = np.sqrt((diff * diff).sum(-1)) - typing.radii[:, None] - typing.radii[None, :]
+    hydrophobic_pair = typing.hydrophobic[:, None] & typing.hydrophobic[None, :] & valid
+    hbond_pair = (
+        (typing.donor[:, None] & typing.acceptor[None, :])
+        | (typing.acceptor[:, None] & typing.donor[None, :])
+    ) & valid
+
+    gauss1_raw, repulsion_raw, hydrophobic_raw, hbond_raw = _term_sums(
+        d, hydrophobic_pair, hbond_pair, params, valid=valid
+    )
+    n_rot = rdMolDescriptors.CalcNumRotatableBonds(heavy, strict=False)
+    return ScoreComponents(
+        gauss1_raw=gauss1_raw,
+        repulsion_raw=repulsion_raw,
+        hydrophobic_raw=hydrophobic_raw,
+        hbond_raw=hbond_raw,
+        params=params,
+        n_rot=n_rot,
+    )
+
+
+def intramolecular_mask(mol: Chem.Mol) -> np.ndarray:
+    """The ligand's scored intramolecular pair mask (upper-triangle boolean).
+
+    A pair counts when it is at least three bonds apart (1-4 and beyond) and lies
+    in different rigid fragments, so it moves relative under some torsion —
+    cmxflow's (Vina's) selection. Depends only on the graph, so a torsion scan
+    computes it once.
+
+    Args:
+        mol: Heavy-atom molecule.
+
+    Returns:
+        (N, N) boolean mask, upper triangle only.
+    """
+    n = mol.GetNumAtoms()
+    fragment = _rigid_fragments(mol)
+    bond_dist = Chem.GetDistanceMatrix(mol)
+    return (
+        np.triu(np.ones((n, n), dtype=bool), k=1)
+        & (bond_dist >= 3)
+        & (fragment[:, None] != fragment[None, :])
+    )
+
+
+def vinardo_objective(
+    ligand_coords: np.ndarray,
+    ligand_typing: AtomTyping,
+    protein_coords: np.ndarray | None,
+    protein_typing: AtomTyping | None,
+    intra_mask: np.ndarray,
+    n_rot: int,
+    params: EmpiricalParams | None = None,
+) -> float:
+    """The Vina search energy: intermolecular + intramolecular Vinardo total.
+
+    This is the pose-settle objective for ``minimize`` — not a binding score. The
+    ligand typing, receptor data, intramolecular mask, and ``n_rot`` are fixed
+    across a torsion scan, so a caller precomputes them once and passes new
+    ``ligand_coords`` per turn.
+
+    Args:
+        ligand_coords: (N, 3) ligand heavy-atom coordinates for this turn.
+        ligand_typing: Ligand Vinardo typing (aligned to ``ligand_coords``).
+        protein_coords: (M, 3) receptor coordinates, or None for no receptor.
+        protein_typing: Receptor typing, or None for no receptor.
+        intra_mask: (N, N) intramolecular pair mask from ``intramolecular_mask``.
+        n_rot: Ligand rotatable-bond count (the torsion divisor's input).
+        params: Scoring weights and cutoffs; the smina Vinardo defaults if None.
+
+    Returns:
+        ``inter.total + intra.total`` (lower is better).
+    """
+    if params is None:
+        params = EmpiricalParams()
+    divisor = 1.0 + params.w_rot * n_rot
+
+    total = 0.0
+    if (
+        protein_coords is not None
+        and protein_typing is not None
+        and len(protein_coords)
+    ):
+        diff = ligand_coords[:, None, :] - protein_coords[None, :, :]
+        d = np.sqrt((diff * diff).sum(-1))
+        d -= ligand_typing.radii[:, None] + protein_typing.radii[None, :]
+        hydrophobic = (
+            ligand_typing.hydrophobic[:, None] & protein_typing.hydrophobic[None, :]
+        )
+        hbond = (ligand_typing.donor[:, None] & protein_typing.acceptor[None, :]) | (
+            ligand_typing.acceptor[:, None] & protein_typing.donor[None, :]
+        )
+        total += _weighted_total(
+            _term_sums(d, hydrophobic, hbond, params), divisor, params
+        )
+
+    diff = ligand_coords[:, None, :] - ligand_coords[None, :, :]
+    d = np.sqrt((diff * diff).sum(-1))
+    d -= ligand_typing.radii[:, None] + ligand_typing.radii[None, :]
+    hydrophobic = (
+        ligand_typing.hydrophobic[:, None]
+        & ligand_typing.hydrophobic[None, :]
+        & intra_mask
+    )
+    hbond = (
+        (ligand_typing.donor[:, None] & ligand_typing.acceptor[None, :])
+        | (ligand_typing.acceptor[:, None] & ligand_typing.donor[None, :])
+    ) & intra_mask
+    total += _weighted_total(
+        _term_sums(d, hydrophobic, hbond, params, valid=intra_mask), divisor, params
+    )
+    return total
+
+
+def _weighted_total(
+    raws: tuple[float, float, float, float], divisor: float, params: EmpiricalParams
+) -> float:
+    """Weight the four raw term sums and apply the torsion divisor."""
+    gauss1, repulsion, hydrophobic, hbond = raws
+    return (
+        params.w_gauss1 * gauss1
+        + params.w_repulsion * repulsion
+        + params.w_hydrophobic * hydrophobic
+        + params.w_hbond * hbond
+    ) / divisor
+
+
 def _term_sums(
     d: np.ndarray,
     hydrophobic_pair: np.ndarray,
     hbond_pair: np.ndarray,
     params: EmpiricalParams,
+    valid: np.ndarray | None = None,
 ) -> tuple[float, float, float, float]:
-    """Unweighted Vinardo term sums over all atom pairs.
+    """Unweighted Vinardo term sums over atom pairs.
 
     Args:
-        d: (N, M) surface distances between ligand and receptor atoms.
-        hydrophobic_pair: (N, M) mask of hydrophobic ligand/receptor pairs.
-        hbond_pair: (N, M) mask of donor/acceptor ligand/receptor pairs.
+        d: (N, M) surface distances between the two atom sets.
+        hydrophobic_pair: (N, M) mask of hydrophobic pairs.
+        hbond_pair: (N, M) mask of donor/acceptor pairs.
         params: The scoring cutoffs.
+        valid: (N, M) mask of pairs to count at all. The gauss1 and repulsion
+            terms apply to every pair by default, so a caller that scores a subset
+            (the intramolecular pair list) passes this to gate them; the
+            hydrophobic and hbond terms are already gated by their pair masks.
+            None counts every pair (the intermolecular case).
 
     Returns:
         The raw ``(gauss1, repulsion, hydrophobic, hbond)`` sums.
@@ -292,6 +506,10 @@ def _term_sums(
     gauss1 = np.exp(-(z**2))  # attraction over every pair
 
     repulsion = np.where(d < 0.0, d**2, 0.0)  # clash penalty over every pair
+
+    if valid is not None:  # score only the selected pairs (intramolecular subset)
+        gauss1 = np.where(valid, gauss1, 0.0)
+        repulsion = np.where(valid, repulsion, 0.0)
 
     span = params.hydro_bad - params.hydro_good
     hydrophobic = np.where(

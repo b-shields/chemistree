@@ -65,14 +65,20 @@ def describe_tree(tree: FragmentTree) -> str:
 
 
 def describe_group(
-    tree: FragmentTree, group_id: int, *, radius: int = 3, use_matrix: bool = False
+    tree: FragmentTree,
+    group_id: int,
+    *,
+    radius: int | None = None,
+    use_matrix: bool = False,
 ) -> str:
     """Render one group's atom positions, rings, and neighbourhood.
 
     Args:
         tree: The tree the group belongs to.
         group_id: Id of the group to detail.
-        radius: Farthest bond distance the positions section describes.
+        radius: Farthest bond distance the positions section describes. None
+            (default) covers the group's fused ring system, so every port relates
+            to every other even across a bicyclic scaffold.
         use_matrix: Show the raw topology distance matrix instead of the
             chemist's-terms positions section (for comparison).
 
@@ -234,7 +240,9 @@ _GREEK_TERMS = [
 ]
 
 
-def positions(mol: Chem.Mol, radius: int = 3, port_names: PortNames = None) -> str:
+def positions(
+    mol: Chem.Mol, radius: int | None = None, port_names: PortNames = None
+) -> str:
     """Describe each heavy atom's neighbourhood in chemist's positional terms.
 
     One line per heavy atom (a mutate target). Each line names the atom's element,
@@ -246,7 +254,9 @@ def positions(mol: Chem.Mol, radius: int = 3, port_names: PortNames = None) -> s
 
     Args:
         mol: The fragment molecule (with explicit hydrogens and dummy ports).
-        radius: Farthest bond distance to describe. Defaults to 3 (para/gamma).
+        radius: Farthest bond distance to describe. None (default) covers the
+            group's fused ring system (a single ring or a chain stays at 3), so
+            ports on opposite sides of a bicyclic still relate to each other.
         port_names: Optional map of port label to the attached group's name, shown
             after the port (``[3*] amine``) for readability.
 
@@ -255,11 +265,36 @@ def positions(mol: Chem.Mol, radius: int = 3, port_names: PortNames = None) -> s
     """
     dmat = Chem.GetDistanceMatrix(mol)
     rings = [set(ring) for ring in mol.GetRingInfo().AtomRings()]
+    if radius is None:
+        radius = _default_radius(dmat, rings)
     heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
     lines = [
         _position_line(mol, x, heavy, dmat, rings, radius, port_names) for x in heavy
     ]
     return "\n".join(lines)
+
+
+def _default_radius(dmat: object, rings: list[set[int]]) -> int:
+    """Describe out to para/gamma, or across a fused ring system when it is larger.
+
+    A single ring spans at most three bonds (para), but a fused ring system spans
+    more, so ports on opposite sides can sit beyond three bonds. Extend the radius
+    to the ring system's diameter so every ring atom (and the port it bears) relates
+    to every other; groups without a ring keep the default 3.
+
+    Args:
+        dmat: The molecule's bond-count distance matrix.
+        rings: The atom-index sets of the SSSR rings.
+
+    Returns:
+        The farthest bond distance to describe.
+    """
+    ring_atoms = sorted(set().union(*rings)) if rings else []
+    diameter = max(
+        (int(dmat[i][j]) for i in ring_atoms for j in ring_atoms),  # type: ignore[index]
+        default=0,
+    )
+    return max(3, diameter)
 
 
 def _position_line(

@@ -8,7 +8,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Geometry import Point3D
 
-from chemistree.scoring import atom_typing, score_pose
+from chemistree.scoring import atom_typing, score_intramolecular, score_pose
 
 DATA = pathlib.Path(__file__).parent / "data" / "abl1"
 
@@ -67,3 +67,30 @@ def test_abl1_crystal_pose_scores_favorably():
         ligand, heavy.GetConformer().GetPositions(), atom_typing(heavy)
     )
     assert components.total == pytest.approx(-11.6, abs=0.2)
+
+
+def test_intramolecular_matches_the_validated_cmxflow_value():
+    # Ground truth: the reference implementation (cmxflow) scores the crystal
+    # ligand's internal Vinardo energy at -0.106673 over 272 non-bonded pairs.
+    ligand = Chem.MolFromMolFile(str(DATA / "reference.sdf"), removeHs=False)
+    assert score_intramolecular(ligand).total == pytest.approx(-0.106673, abs=1e-4)
+
+
+def test_intramolecular_is_zero_for_a_single_rigid_ring():
+    # Benzene is one rigid fragment, so no pair is in different fragments: nothing
+    # is scored, and the internal energy is exactly zero.
+    benzene = Chem.AddHs(Chem.MolFromSmiles("c1ccccc1"))
+    AllChem.EmbedMolecule(benzene, randomSeed=1)
+    assert score_intramolecular(benzene).total == 0.0
+
+
+def test_intramolecular_penalizes_an_internal_clash():
+    # Hexane's terminal carbons are five bonds apart in different rigid fragments,
+    # so they are scored; overlapping them drives the internal energy up.
+    hexane = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"))
+    AllChem.EmbedMolecule(hexane, randomSeed=1)
+    relaxed = score_intramolecular(hexane).total
+    conf = hexane.GetConformer()
+    heavy = [a.GetIdx() for a in hexane.GetAtoms() if a.GetAtomicNum() > 1]
+    conf.SetAtomPosition(heavy[-1], conf.GetAtomPosition(heavy[0]))
+    assert score_intramolecular(hexane).total > relaxed

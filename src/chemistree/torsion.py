@@ -161,6 +161,26 @@ def scan_torsion(
     scores = _scan_scores(
         moving_xyz, axis_point, axis_dir, moving_r, other_xyz, other_r, tol
     )
+    return scan_result(scores, target_deg=target_deg, window_deg=window_deg)
+
+
+def scan_result(
+    scores: np.ndarray, *, target_deg: float, window_deg: float
+) -> ScanResult:
+    """Assemble a scan result from a score at each whole-degree turn.
+
+    Lower scores are better; ties break toward ``target_deg``. Shared by the clash
+    scan and the Vinardo scan, which differ only in how they score each turn.
+
+    Args:
+        scores: (360,) score at each whole-degree turn.
+        target_deg: The requested turn; the window centres on it and ties resolve
+            toward it.
+        window_deg: Half-width of the window around ``target_deg``.
+
+    Returns:
+        The current, window-best, and global-best turns.
+    """
     window = [
         deg % 360
         for deg in range(

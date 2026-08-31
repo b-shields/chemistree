@@ -117,12 +117,12 @@ def test_command_contacts_reports_site_contacts():
     assert report.startswith("# Binding-site contacts (within 4.5 A)")
 
 
-def test_command_rotate_returns_a_report():
+def test_command_minimize_returns_a_report():
     session = DesignSession("CCc1ccccc1", three_d=True)  # ethylbenzene
     ethyl = _node_id(session, lambda m: _heavy(m) == 2)
-    report = run_command(session, f"rotate {ethyl} 120")
-    assert report.startswith("Rotated")
-    assert "Clash score" in report
+    report = run_command(session, f"minimize {ethyl}")
+    assert report.startswith("Settled")
+    assert "Energy" in report
 
 
 def test_command_clashes_returns_a_report():

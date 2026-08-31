@@ -431,97 +431,34 @@ def _leaf_by_heavy(session: DesignSession, n_heavy: int) -> int:
     return node.id
 
 
-def test_rotate_leaves_the_constitution_unchanged():
+def test_minimize_leaves_the_constitution_unchanged():
     session = DesignSession("CCc1ccccc1", three_d=True)  # ethylbenzene
     before = session.smiles()
-    session.rotate(_leaf_by_heavy(session, 2), 120)  # the ethyl
+    session.minimize(_leaf_by_heavy(session, 2))  # the ethyl
     assert session.smiles() == before  # a torsion changes coordinates, not the graph
 
 
-def test_rotate_turns_the_group_and_leaves_the_scaffold_fixed():
-    session = DesignSession("CCc1ccccc1", three_d=True)
-    ethyl = _leaf_by_heavy(session, 2)
-    ring = next(
-        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
-    )
-    ring_before = _positions(session.tree.node(ring).current.mol)
-    ethyl_before = _positions(session.tree.node(ethyl).current.mol)
-    session.rotate(ethyl, 120)
-    # The ring (the other side of the bond) does not move.
-    assert np.allclose(ring_before, _positions(session.tree.node(ring).current.mol))
-    # The ethyl does move.
-    assert not np.allclose(
-        ethyl_before, _positions(session.tree.node(ethyl).current.mol)
-    )
+def test_minimize_lowers_the_search_energy_and_is_undoable():
+    # A core hop leaves the arms clashing; minimizing an arm turns it about its
+    # attachment bond to a lower-energy (inter + intra Vinardo) rotamer, carrying
+    # its subtree rigidly, and the turn is undoable.
+    session = _abl1_session()
+    session.swap(0, "[*]c1ccc2ccc([*])c([*])c2n1")  # core hop -> arms clash
+    before_energy = session.affinity() + session.internal_energy()
+    arm_before = _positions(session.tree.node(1).current.mol)
 
+    session.minimize(1)
+    assert session.affinity() + session.internal_energy() < before_energy
+    assert not np.allclose(arm_before, _positions(session.tree.node(1).current.mol))
 
-def test_rotate_carries_a_ring_substituent_rigidly():
-    # A substituted ring hanging off a scaffold: rotating the ring about the bond
-    # to the scaffold must carry its substituent, as one rigid body.
-    session = DesignSession("c1ccccc1-c1ccc(C)cc1", three_d=True)  # 4-methylbiphenyl
-
-    # The substituted ring is the six-membered ring bearing the methyl (2 edges).
-    ring_ids = [
-        n.id
-        for n in session.tree.nodes
-        if n.current.mol.GetRingInfo().NumRings() > 0 and n.id is not None
-    ]
-    sub_ring = next(
-        nid
-        for nid in ring_ids
-        if len(session.tree.neighbors(session.tree.node(nid))) == 2
-    )
-    plain_ring = next(nid for nid in ring_ids if nid != sub_ring)
-    methyl = _leaf_by_heavy(session, 1)
-
-    plain_before = _positions(session.tree.node(plain_ring).current.mol)
-    ring_before = _positions(session.tree.node(sub_ring).current.mol)
-    methyl_c_before = _positions(session.tree.node(methyl).current.mol)
-    # distance between a ring atom and the methyl carbon, to check rigidity
-    gap_before = float(
-        np.linalg.norm(
-            ring_before[0] - methyl_c_before[_methyl_carbon(session, methyl)]
-        )
-    )
-
-    session.rotate(sub_ring, 90)
-
-    # The plain ring (scaffold side) is fixed; the substituted ring turned.
-    assert np.allclose(
-        plain_before, _positions(session.tree.node(plain_ring).current.mol)
-    )
-    assert not np.allclose(
-        ring_before, _positions(session.tree.node(sub_ring).current.mol)
-    )
-    # The methyl moved with the ring, preserving their separation (rigid subtree).
-    ring_after = _positions(session.tree.node(sub_ring).current.mol)
-    methyl_c_after = _positions(session.tree.node(methyl).current.mol)
-    assert not np.allclose(methyl_c_before, methyl_c_after)  # the methyl came along
-    gap_after = float(
-        np.linalg.norm(ring_after[0] - methyl_c_after[_methyl_carbon(session, methyl)])
-    )
-    assert gap_after == pytest.approx(gap_before, abs=1e-6)
-
-
-def _methyl_carbon(session: DesignSession, methyl_id: int) -> int:
-    """Index of the carbon in a methyl fragment."""
-    mol = session.tree.node(methyl_id).current.mol
-    return int(next(a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 6))
-
-
-def test_rotate_is_undoable():
-    session = DesignSession("CCc1ccccc1", three_d=True)
-    ethyl = _leaf_by_heavy(session, 2)
-    before = _positions(session.tree.node(ethyl).current.mol)
-    session.rotate(ethyl, 120)
     session.undo()
-    assert np.allclose(before, _positions(session.tree.node(ethyl).current.mol))
+    assert np.allclose(arm_before, _positions(session.tree.node(1).current.mol))
 
 
-def test_rotate_requires_3d_coordinates():
+def test_minimize_requires_3d_coordinates():
     session = DesignSession("CCc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="3D"):
-        session.rotate(_leaf_by_heavy(session, 2), 120)
+        session.minimize(_leaf_by_heavy(session, 2))
 
 
 def test_clashes_reports_none_for_a_clean_structure():
@@ -589,6 +526,18 @@ def test_describe_affinity_worsens_when_a_group_is_shoved_into_the_receptor():
 def test_describe_omits_affinity_without_a_receptor():
     session = DesignSession("Cc1ccccc1", three_d=True)
     assert "Predicted affinity" not in session.describe()
+
+
+def test_describe_shows_internal_energy_in_3d_even_without_a_receptor():
+    # The intramolecular energy needs a conformer, not a receptor, so it shows for
+    # a 3D ligand with no protein; the affinity line still does not.
+    describe = DesignSession("Cc1ccccc1", three_d=True).describe()
+    assert "Internal energy (Vinardo):" in describe
+    assert "Predicted affinity" not in describe
+
+
+def test_describe_omits_internal_energy_without_3d_coordinates():
+    assert "Internal energy" not in DesignSession("Cc1ccccc1", three_d=False).describe()
 
 
 def test_describe_omits_affinity_without_3d_coordinates():

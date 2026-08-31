@@ -14,7 +14,7 @@ def run_command(session: DesignSession, text: str) -> str:
         grow <id> <position_id> <group>
         mutate <id> <position_id> <element>
         remove <id>
-        rotate <id> <degrees> [window]
+        minimize <id> [degrees] [window]
         undo
         group <id>
         distance <residue>
@@ -53,9 +53,10 @@ def run_command(session: DesignSession, text: str) -> str:
     if command == "remove":
         session.remove(int(args[0]))
         return f"removed group {args[0]}"
-    if command == "rotate":
-        window = float(args[2]) if len(args) > 2 else 60.0
-        return session.rotate(int(args[0]), float(args[1]), window=window)
+    if command == "minimize":
+        degrees = float(args[1]) if len(args) > 1 else 0.0
+        window = float(args[2]) if len(args) > 2 else 180.0
+        return session.minimize(int(args[0]), degrees, window=window)
     if command == "undo":
         session.undo()
         return "reverted the last edit"

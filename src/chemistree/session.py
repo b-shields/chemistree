@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import rdMolTransforms
+from rdkit.Chem import rdMolDescriptors, rdMolTransforms
 
 from chemistree.annotations import NodeAnnotation, annotate
 from chemistree.chem import prepare_molecule
@@ -29,8 +29,15 @@ from chemistree.geometry import align_transform
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
 from chemistree.receptor import Receptor, Residue
-from chemistree.scoring import ScoreComponents, score_pose
-from chemistree.torsion import ScanResult, axis_matrix, scan_torsion, worst_overlap
+from chemistree.scoring import (
+    ScoreComponents,
+    atom_typing,
+    intramolecular_mask,
+    score_intramolecular,
+    score_pose,
+    vinardo_objective,
+)
+from chemistree.torsion import ScanResult, axis_matrix, scan_result, worst_overlap
 from chemistree.tree import Edge, FragmentNode, FragmentTree, heavy_count
 
 
@@ -101,20 +108,24 @@ class DesignSession:
         affinity is appended too, so all of it updates with every edit.
         """
         overview = describe_tree(self.tree)
-        profile = profile_markdown(self.molecule())
+        lines = [overview, profile_markdown(self.molecule())]
         components = self._pose_components()
-        if components is None:
-            return f"{overview}\n\n{profile}"
-        return f"{overview}\n\n{profile}\n\n{_affinity_line(components)}"
+        if components is not None:
+            lines.append(_affinity_line(components))
+        intra = self._intra_components()
+        if intra is not None:
+            lines.append(_internal_energy_line(intra))
+        return "\n\n".join(lines)
 
     def describe_group(
-        self, group_id: int, *, radius: int = 3, use_matrix: bool = False
+        self, group_id: int, *, radius: int | None = None, use_matrix: bool = False
     ) -> str:
         """The atom positions, rings, and neighbourhood of one group.
 
         Args:
             group_id: Id of the group to detail.
-            radius: Farthest bond distance the positions section describes.
+            radius: Farthest bond distance the positions section describes. None
+                (default) covers the group's fused ring system.
             use_matrix: Show the raw topology distance matrix instead of the
                 chemist's-terms positions section (for comparison).
 
@@ -360,48 +371,90 @@ class DesignSession:
         assert best is not None  # a pocket residue has at least one nearby atom
         return best
 
-    def rotate(self, group_id: int, degrees: float, *, window: float = 60.0) -> str:
-        """Rotate a group about its attachment bond, settling to reduce clashes.
+    def minimize(
+        self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
+    ) -> str:
+        """Settle a group about its attachment bond to its best-scoring rotamer.
 
         The group turns about the single bond joining it to the rest of the
         molecule, carrying its own substituents as one rigid body. Every whole-
-        degree turn is scored for steric clash (with the rest of the ligand and,
-        when present, the receptor); the least-clashing turn within ``window`` of
-        the request is applied. The constitution is unchanged, so the SMILES stays
-        the same.
+        degree turn is scored by the full Vinardo search energy — the ligand's
+        intramolecular strain plus, when a receptor is loaded, the protein-ligand
+        fit — and the best turn within ``window`` of the request is applied (ties
+        toward the request). The constitution is unchanged, so the SMILES stays the
+        same. The wide default window makes ``minimize(id)`` settle the group over
+        the whole circle.
 
         Args:
-            group_id: Id of the group to rotate.
-            degrees: Requested turn, in degrees.
+            group_id: Id of the group to settle.
+            degrees: Requested turn, in degrees; 0 settles from the current pose.
             window: Half-width, in degrees, of the search around ``degrees``.
 
         Returns:
-            A short report: the applied turn, the clash score before and after,
-            and the global-best turn when it would relieve the clash further.
+            A short report: the applied turn and the search energy before and after.
 
         Raises:
             ValueError: If the ligand lacks 3D coordinates or the group is the
                 only fragment.
         """
         if not self.tree.nodes[0].current.mol.GetNumConformers():
-            raise ValueError("rotation needs a ligand with 3D coordinates")
+            raise ValueError("minimize needs a ligand with 3D coordinates")
         node = self.tree.node(group_id)
         if not self.tree.neighbors(node):
-            raise ValueError("cannot rotate the only group")
+            raise ValueError("cannot minimize the only group")
         axis_edge, _, moving = self._attachment(node)
         axis_point, axis_dir = self._axis(node, axis_edge)
 
-        result = self._scan(self._pose(), moving, axis_point, axis_dir, degrees, window)
+        result = self._vinardo_scan(moving, axis_point, axis_dir, degrees, window)
         applied = result.window_best[0]
         with self._edit():
             matrix = axis_matrix(axis_point, axis_dir, math.radians(applied))
             for moving_node in moving:
-                rotated = Chem.Mol(moving_node.current.mol)
-                rdMolTransforms.TransformConformer(rotated.GetConformer(), matrix)
-                moving_node.push(Fragment(rotated))
+                turned = Chem.Mol(moving_node.current.mol)
+                rdMolTransforms.TransformConformer(turned.GetConformer(), matrix)
+                moving_node.push(Fragment(turned))
 
         label = self._label(group_id)
-        return _rotation_report(group_id, label, degrees, applied, result)
+        return _minimize_report(group_id, label, degrees, applied, result)
+
+    def _vinardo_scan(
+        self,
+        moving: set[FragmentNode],
+        axis_point: np.ndarray,
+        axis_dir: np.ndarray,
+        degrees: float,
+        window: float,
+    ) -> ScanResult:
+        """Score every one-degree turn of the moving side by the Vinardo energy.
+
+        The ligand typing, receptor data, intramolecular pair mask, and rotatable-
+        bond count are fixed across the turn, so they are computed once; each turn
+        rotates only the moving atoms and re-scores intermolecular + intramolecular
+        Vinardo (``vinardo_objective``).
+        """
+        heavy = Chem.RemoveAllHs(self.molecule())
+        coords = heavy.GetConformer().GetPositions()
+        typing = atom_typing(heavy)
+        intra_mask = intramolecular_mask(heavy)
+        n_rot = rdMolDescriptors.CalcNumRotatableBonds(heavy, strict=False)
+        node_id = np.array([a.GetIntProp("node_id") for a in heavy.GetAtoms()])
+        moving_mask = np.isin(node_id, [n.id for n in moving])
+        moving_coords = coords[moving_mask]
+        prot_coords, prot_typing = (
+            self.receptor.scoring_context()
+            if self.receptor is not None
+            else (None, None)
+        )
+
+        scores = np.empty(360)
+        for degree in range(360):
+            matrix = axis_matrix(axis_point, axis_dir, math.radians(degree))
+            turned = coords.copy()
+            turned[moving_mask] = moving_coords @ matrix[:3, :3].T + matrix[:3, 3]
+            scores[degree] = vinardo_objective(
+                turned, typing, prot_coords, prot_typing, intra_mask, n_rot
+            )
+        return scan_result(scores, target_deg=degrees, window_deg=window)
 
     def clashes(self, *, tol: float = 0.4) -> str:
         """Report steric clashes in the current pose, worst first.
@@ -444,6 +497,30 @@ class DesignSession:
         """
         components = self._pose_components(mol)
         return None if components is None else components.total
+
+    def internal_energy(self, mol: Chem.Mol | None = None) -> float | None:
+        """The ligand's internal Vinardo energy, or None without 3D coordinates.
+
+        This is the intramolecular energy (Vina's search term), not a binding
+        score: it rises sharply when an edit leaves groups clashing inside the
+        molecule, and needs no receptor. The reported affinity stays
+        protein-ligand only.
+
+        Args:
+            mol: The molecule to score. Defaults to the current molecule.
+
+        Returns:
+            The intramolecular Vinardo total (lower is better) when the ligand is
+            posed in 3D; None otherwise.
+        """
+        components = self._intra_components(mol)
+        return None if components is None else components.total
+
+    def _intra_components(self, mol: Chem.Mol | None = None) -> ScoreComponents | None:
+        """The ligand's intramolecular score breakdown, or None without 3D coords."""
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            return None
+        return score_intramolecular(self.molecule() if mol is None else mol)
 
     def _pose_components(self, mol: Chem.Mol | None = None) -> ScoreComponents | None:
         """A pose's Vinardo score, or None without a posed receptor.
@@ -636,63 +713,6 @@ class DesignSession:
         direction = np.array(list(conf.GetAtomPosition(port.dummy_idx))) - point
         return point, direction
 
-    def _scan(
-        self,
-        pose: _Pose,
-        moving: set[FragmentNode],
-        axis_point: np.ndarray,
-        axis_dir: np.ndarray,
-        degrees: float,
-        window: float,
-    ) -> ScanResult:
-        """Score every one-degree turn of the moving side against its surroundings.
-
-        The moving atoms are the group's subtree; the surroundings are the rest of
-        the ligand more than two bonds away (nearer atoms hold fixed geometry the
-        turn cannot change) plus any nearby receptor atoms.
-        """
-        moving_ids = {n.id for n in moving}
-        is_moving = np.isin(pose.node_id, list(moving_ids))
-        # Keep a static atom only if it is over two bonds from every moving atom.
-        near_moving = (pose.bond_dist[~is_moving][:, is_moving] <= 2).any(axis=1)
-        other_xyz = pose.xyz[~is_moving][~near_moving]
-        other_r = pose.radii[~is_moving][~near_moving]
-
-        moving_xyz = pose.xyz[is_moving]
-        other_xyz, other_r = self._add_receptor(
-            other_xyz, other_r, moving_xyz, axis_point
-        )
-        return scan_torsion(
-            moving_xyz,
-            axis_point=axis_point,
-            axis_dir=axis_dir,
-            moving_r=pose.radii[is_moving],
-            other_xyz=other_xyz,
-            other_r=other_r,
-            target_deg=degrees,
-            window_deg=window,
-        )
-
-    def _add_receptor(
-        self,
-        other_xyz: np.ndarray,
-        other_r: np.ndarray,
-        moving_xyz: np.ndarray,
-        axis_point: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Append receptor heavy atoms that any turn could bring near the group."""
-        if self.receptor is None or len(moving_xyz) == 0:
-            return other_xyz, other_r
-        rec_xyz, rec_r = self.receptor.heavy_atoms()
-        reach = float(np.linalg.norm(moving_xyz - axis_point, axis=1).max())
-        near = np.linalg.norm(rec_xyz - axis_point, axis=1) < reach + 4.0
-        if not near.any():
-            return other_xyz, other_r
-        return (
-            np.vstack([other_xyz, rec_xyz[near]]),
-            np.concatenate([other_r, rec_r[near]]),
-        )
-
     def _label(self, group_id: int) -> str:
         """The chemist-facing name of a group, for reports."""
         return _name({n.id: n for n in annotate(self.tree).nodes}[group_id])
@@ -802,6 +822,14 @@ def _affinity_line(components: ScoreComponents) -> str:
     )
 
 
+def _internal_energy_line(components: ScoreComponents) -> str:
+    """The ligand internal-energy line appended to a 3D describe."""
+    return (
+        f"**Internal energy (Vinardo):** {components.total:.2f} "
+        "(intramolecular; lower is better)"
+    )
+
+
 def _clashes_report(findings: list[tuple[float, str]]) -> str:
     """Render the clash findings, already sorted worst first."""
     if not findings:
@@ -809,19 +837,19 @@ def _clashes_report(findings: list[tuple[float, str]]) -> str:
     return "\n".join(["# Clashes", ""] + [f"- {desc}" for _, desc in findings])
 
 
-def _rotation_report(
+def _minimize_report(
     group_id: int, label: str, requested: float, applied: int, result: ScanResult
 ) -> str:
-    """Render the outcome of a torsion rotation for the agent."""
+    """Render the outcome of a Vinardo torsion settle for the agent."""
     before, after = result.current, result.window_best[1]
     lines = [
-        f"Rotated [{group_id}] {label} by {applied} deg (requested {requested:g} deg).",
-        f"Clash score {before:.2f} -> {after:.2f}.",
+        f"Settled [{group_id}] {label} by {applied} deg (requested {requested:g} deg).",
+        f"Energy {before:.2f} -> {after:.2f}.",
     ]
     global_deg, global_score = result.global_best
     if global_score < after - 0.05:
         lines.append(
-            f"A larger turn to {global_deg} deg would lower the clash to "
+            f"A larger turn to {global_deg} deg would lower the energy to "
             f"{global_score:.2f}."
         )
     return "\n".join(lines)

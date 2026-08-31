@@ -87,14 +87,14 @@ def _system_prompt(tools: str, primed_note: str = "") -> str:
 
 
 _SYSTEM_PROMPT = _system_prompt(
-    "describe, describe_group, smiles, swap, grow, mutate, remove, rotate, undo, "
+    "describe, describe_group, smiles, swap, grow, mutate, remove, minimize, undo, "
     "distance, contacts, clashes"
 )
 # The primed mode seeds the group listing up front and refreshes it after each edit,
 # so the describe overview is blocked; the agent acts on the given ids and calls
 # describe_group for atom positions.
 _PRIMED_PROMPT = _system_prompt(
-    "describe_group, smiles, swap, grow, mutate, remove, rotate, undo, distance, "
+    "describe_group, smiles, swap, grow, mutate, remove, minimize, undo, distance, "
     "contacts, clashes",
     primed_note=(
         "# Session note\n\n"
@@ -140,7 +140,7 @@ _TOOL_PHRASES = {
     "grow": "growing a group",
     "mutate": "mutating an atom",
     "remove": "removing a group",
-    "rotate": "rotating a group",
+    "minimize": "settling the pose",
     "undo": "undoing the last edit",
     "distance": "measuring distances",
     "contacts": "mapping the binding site",

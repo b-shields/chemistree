@@ -220,22 +220,24 @@ def contacts(dist_cutoff: float = 4.5) -> str:
 
 
 @mcp.tool
-def rotate(group_id: int, degrees: float, window: float = 60.0) -> str:
-    """Rotate a group about its attachment bond to relieve a clash.
+def minimize(group_id: int, degrees: float = 0.0, window: float = 180.0) -> str:
+    """Settle a group about its attachment bond into its best-scoring rotamer.
 
     The group turns about the single bond joining it to the rest of the molecule,
-    carrying its own substituents. Every whole-degree turn is scored for steric
-    clash; the least-clashing turn within ``window`` of the request is applied. Use
-    this after ``clashes`` reports a strained group. The result reports the applied
-    turn and the clash score before and after.
+    carrying its own substituents. Every whole-degree turn is scored by the full
+    Vinardo energy — the ligand's own internal strain plus, with a receptor, the
+    protein-ligand fit — and the best turn is applied. Use this to settle a group
+    after an edit that added or moved more than one heavy atom (call ``clashes`` to
+    find a strained group). The result reports the applied turn and the energy
+    before and after.
 
     Args:
-        group_id: Group to rotate (from ``describe``).
-        degrees: Requested turn, in degrees (e.g. 120).
-        window: How far, in degrees, the search may stray from ``degrees`` to
-            reduce the clash.
+        group_id: Group to settle (from ``describe``).
+        degrees: Requested turn, in degrees; 0 settles from the current pose over
+            the whole circle.
+        window: How far, in degrees, the search may stray from ``degrees``.
     """
-    return _command(f"rotate {group_id} {degrees} {window}", with_state=_PRIME)
+    return _command(f"minimize {group_id} {degrees} {window}", with_state=_PRIME)
 
 
 @mcp.tool
