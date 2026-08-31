@@ -723,7 +723,7 @@ class DesignSession:
         Callers wrap this in :meth:`_edit`, which snapshots the tree for undo and
         records the result.
         """
-        sub_nodes, _ = self.tree.resplice(node, region_mol)
+        sub_nodes = self.tree.resplice(node, region_mol)
         self._normalize_new_hydrogens(sub_nodes)
         return sub_nodes
 

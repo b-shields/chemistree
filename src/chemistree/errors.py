@@ -1,7 +1,7 @@
-"""Structured errors for deterministic reference resolution.
+"""Structured errors for reference resolution.
 
-A resolution step returns exactly one result or raises one of these, so the caller
-can react to "nothing matched" or "several matched" rather than receive a guess.
+A lookup returns exactly one result or raises ``NotFound``, so the caller reacts to
+"nothing matched" rather than receiving a guess.
 """
 
 from __future__ import annotations
@@ -13,15 +13,3 @@ class ResolutionError(Exception):
 
 class NotFound(ResolutionError):
     """No candidate matched the reference."""
-
-
-class Ambiguous(ResolutionError):
-    """More than one candidate matched the reference.
-
-    Attributes:
-        candidates: Ids of the nodes that matched.
-    """
-
-    def __init__(self, message: str, candidates: list[int]):
-        super().__init__(message)
-        self.candidates = candidates

@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from rdkit import Chem
 
 from chemistree.fragment import Fragment
-
-if TYPE_CHECKING:
-    from chemistree.annotations import TreeAnnotation
 
 
 class FragmentNode:
@@ -59,24 +54,6 @@ class Edge:
     node_a: FragmentNode
     node_b: FragmentNode
     bond_type: Chem.BondType
-
-
-@dataclass
-class RemovedSubtree:
-    """What a ``remove_subtree`` took out, enough to put it back.
-
-    Attributes:
-        nodes: The removed nodes (the target and its dependent groups).
-        edges: The edges that were incident to any removed node.
-        parent: The kept node whose port was capped, to be uncapped on restore.
-        parent_site: Index (in ``parent``'s fragment) of the atom whose port was
-            capped, so a later edit can grow a group back at the freed site.
-    """
-
-    nodes: list[FragmentNode]
-    edges: list[Edge]
-    parent: FragmentNode
-    parent_site: int
 
 
 @dataclass
@@ -153,9 +130,7 @@ class FragmentTree:
                 out.append((edge, edge.node_a))
         return out
 
-    def resplice(
-        self, node: FragmentNode, region_mol: Chem.Mol
-    ) -> tuple[list[FragmentNode], Callable[[], None]]:
+    def resplice(self, node: FragmentNode, region_mol: Chem.Mol) -> list[FragmentNode]:
         """Replace a node with the fragmentation of its edited region.
 
         ``region_mol`` is the node's atoms after an edit, still carrying the node's
@@ -171,11 +146,10 @@ class FragmentTree:
             region_mol: The edited region, with the node's external-port dummies.
 
         Returns:
-            The new sub-nodes and an undo closure that restores the prior tree.
+            The new sub-nodes. Undo is handled by the session's tree snapshots.
         """
         from chemistree.fragmenter import should_break
 
-        before = (list(self.nodes), list(self.edges), dict(self._by_id), self._next_id)
         external = {edge.label: other for edge, other in self.neighbors(node)}
 
         breakable = [
@@ -198,17 +172,7 @@ class FragmentTree:
         sub_nodes = [FragmentNode(Fragment(p)) for p in pieces]
         self._replace_node(node, sub_nodes)
         self._rewire(sub_nodes, external)
-
-        def undo() -> None:
-            """Restore the tree to its state before this resplice."""
-            self.nodes, self.edges, self._by_id, self._next_id = (
-                before[0],
-                before[1],
-                before[2],
-                before[3],
-            )
-
-        return sub_nodes, undo
+        return sub_nodes
 
     def _replace_node(self, node: FragmentNode, sub_nodes: list[FragmentNode]) -> None:
         """Swap ``node`` out for its sub-nodes; the largest inherits its id."""
@@ -252,7 +216,7 @@ class FragmentTree:
         """Nodes with at most one edge."""
         return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
 
-    def remove_subtree(self, node: FragmentNode) -> RemovedSubtree:
+    def remove_subtree(self, node: FragmentNode) -> None:
         """Prune a node and its dependent groups, keeping the largest remainder.
 
         Cutting a node splits the tree into one component per edge. The largest
@@ -260,13 +224,10 @@ class FragmentTree:
         removing a leaf drops just that leaf, and removing a ring drops the ring
         with its own substituents, while the main scaffold stays. The kept side's
         port to ``node`` is capped: its dummy becomes an explicit H, preserving
-        the anchor's valence and 3D position.
+        the anchor's valence and 3D position. Undo is the session's tree snapshot.
 
         Args:
             node: The node to remove, with the smaller side(s) that depend on it.
-
-        Returns:
-            A record of what was removed, so ``restore_subtree`` can undo it.
 
         Raises:
             ValueError: If it is the only node, so nothing would remain.
@@ -279,19 +240,13 @@ class FragmentTree:
             if len(component) > len(largest):
                 largest = component
         keep = set(largest)
-        parent = None
-        parent_site = -1
+        capped = False
         for edge, other in self.neighbors(node):
             if other in keep:
-                parent = other
-                # Record the anchor before capping, so a later ``fill`` knows
-                # which atom the freed port sat on.
-                parent_site = next(
-                    p.anchor_idx for p in other.current.ports if p.label == edge.label
-                )
                 _cap_port(other, edge.label)
+                capped = True
                 break
-        assert parent is not None  # a non-only node always touches the kept side
+        assert capped  # a non-only node always touches the kept side
         removed = {node}
         for component in components:
             if not keep.issuperset(component):
@@ -304,25 +259,6 @@ class FragmentTree:
         for gone in removed:
             if gone.id is not None:
                 self._by_id.pop(gone.id, None)
-        return RemovedSubtree(
-            nodes=list(removed),
-            edges=removed_edges,
-            parent=parent,
-            parent_site=parent_site,
-        )
-
-    def restore_subtree(self, removed: RemovedSubtree) -> None:
-        """Undo a ``remove_subtree``: re-add its nodes and edges, uncap the parent.
-
-        Args:
-            removed: The record returned by ``remove_subtree``.
-        """
-        removed.parent.undo()  # revert the cap, restoring the dummy port
-        for node in removed.nodes:
-            self.nodes.append(node)
-            if node.id is not None:
-                self._by_id[node.id] = node
-        self.edges.extend(removed.edges)
 
     def _components(self, *, without: FragmentNode) -> list[list[FragmentNode]]:
         """Connected components of the tree with one node excluded."""
@@ -343,19 +279,6 @@ class FragmentTree:
                         queue.append(other)
             components.append(component)
         return components
-
-    def annotations(self, *, atoms: bool = False) -> TreeAnnotation:
-        """A serializable, agent-facing description of the tree.
-
-        Args:
-            atoms: Include per-atom detail on each node.
-
-        Returns:
-            The tree annotation.
-        """
-        from chemistree.annotations import annotate
-
-        return annotate(self, atoms=atoms)
 
     def reconstruct(self) -> Chem.Mol:
         """Fuse all current fragments back into a single molecule.
