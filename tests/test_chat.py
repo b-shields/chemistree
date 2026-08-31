@@ -33,6 +33,18 @@ def test_build_command_runs_the_requested_model():
     assert cmd[cmd.index("--model") + 1] == "sonnet"
 
 
+def test_build_command_narrates_by_default():
+    cmd = build_command(EXPLORE)
+    prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    assert "before each meaningful edit" in prompt
+
+
+def test_skip_narration_drops_the_rationale_note():
+    cmd = build_command(EXPLORE, narrate=False)
+    prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    assert "before each meaningful edit" not in prompt
+
+
 def test_build_command_allows_only_mcp_tools():
     cmd = build_command(EXPLORE)
     assert cmd[cmd.index("--allowedTools") + 1] == "mcp__chemistree"
@@ -117,6 +129,18 @@ def test_assistant_text_becomes_a_text_event():
         "message": {"content": [{"type": "text", "text": "Done — Cl is now F."}]},
     }
     assert to_events(message) == [{"kind": "text", "text": "Done — Cl is now F."}]
+
+
+def test_assistant_thinking_becomes_a_thinking_event():
+    message = {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "thinking", "thinking": "This pocket is lipophilic."}]
+        },
+    }
+    assert to_events(message) == [
+        {"kind": "thinking", "text": "This pocket is lipophilic."}
+    ]
 
 
 def test_assistant_tool_use_becomes_a_domain_phrase():

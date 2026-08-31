@@ -40,6 +40,12 @@ def main() -> None:
         help="Claude model the chat agent runs: 'haiku' (default, fastest), "
         "'sonnet' (balanced), or 'opus' (most capable).",
     )
+    parser.add_argument(
+        "--skip-narration",
+        action="store_true",
+        help="Turn off the agent's one-line rationale before each edit (quieter, "
+        "cheaper). Narration is on by default.",
+    )
     args = parser.parse_args()
 
     ligand = Chem.MolFromMolFile(args.molecule, removeHs=False)
@@ -51,7 +57,13 @@ def main() -> None:
         if receptor is None:
             parser.error(f"could not read receptor: {args.receptor}")
 
-    state.configure(ligand, receptor, mode=MODES[args.chat_mode], model=args.model)
+    state.configure(
+        ligand,
+        receptor,
+        mode=MODES[args.chat_mode],
+        model=args.model,
+        narrate=not args.skip_narration,
+    )
 
     from chemistree.app.server import app
 

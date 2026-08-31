@@ -86,12 +86,14 @@
 
     .panel.chat { margin-top: 12px; }
     #feed {
-      height: 110px; overflow-y: auto; padding: 8px 10px; background: var(--bg);
+      height: 143px; overflow-y: auto; padding: 8px 10px; background: var(--bg);
       display: flex; flex-direction: column; gap: 6px;
     }
     .msg { white-space: pre-wrap; }
     .msg.user { color: var(--accent); }
     .msg.tool { color: var(--muted); font-style: italic; }
+    .msg.think { color: var(--muted); font-style: italic; opacity: .65;
+      font-size: .9em; border-left: 2px solid var(--border); padding-left: 8px; }
     .msg.err { color: #e06c6c; }
     #say {
       width: 100%; resize: none; padding: 8px 10px; font: inherit; line-height: 1.4;
@@ -306,6 +308,7 @@
     cws.onmessage = (e) => {
       const ev = JSON.parse(e.data);
       if (ev.kind === "text") addMsg("bot", ev.text);
+      else if (ev.kind === "thinking") addMsg("think", "💭 " + ev.text);
       else if (ev.kind === "tool") addMsg("tool", "· " + ev.phrase + "…");
       else if (ev.kind === "notice") addMsg("tool", ev.text);
       else if (ev.kind === "error") addMsg("err", ev.message);

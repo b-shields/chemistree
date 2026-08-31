@@ -16,6 +16,7 @@ from chemistree.session import DesignSession
 _session: DesignSession | None = None
 _mode: ChatMode = DEFAULT_MODE
 _model: str = DEFAULT_MODEL
+_narrate: bool = True
 receptor_pdb: str = ""
 clients: set[WebSocket] = set()
 
@@ -26,6 +27,7 @@ def configure(
     *,
     mode: ChatMode = DEFAULT_MODE,
     model: str = DEFAULT_MODEL,
+    narrate: bool = True,
 ) -> None:
     """Set the molecule (and optional receptor) the app edits.
 
@@ -34,11 +36,13 @@ def configure(
         receptor: Optional receptor for proximity context and 3D display.
         mode: The chat mode the ``/chat`` endpoint runs in.
         model: The Claude model the ``/chat`` endpoint runs.
+        narrate: Whether the agent narrates a one-line rationale per edit.
     """
-    global _session, _mode, _model, receptor_pdb
+    global _session, _mode, _model, _narrate, receptor_pdb
     _session = DesignSession(ligand, receptor)
     _mode = mode
     _model = model
+    _narrate = narrate
     receptor_pdb = Chem.MolToPDBBlock(receptor) if receptor is not None else ""
 
 
@@ -50,6 +54,11 @@ def get_mode() -> ChatMode:
 def get_model() -> str:
     """The Claude model selected at configuration time."""
     return _model
+
+
+def get_narrate() -> bool:
+    """Whether the agent narrates its reasoning, selected at configuration time."""
+    return _narrate
 
 
 def get_session() -> DesignSession:

@@ -151,8 +151,21 @@ _TOOL_PHRASES = {
 }
 
 
+# Appended to the prompt so the agent narrates its reasoning as it works. Claude
+# Code omits the model's thinking text in headless mode, so a spoken rationale is
+# how the reasoning reaches the demo feed. Off via the --skip-narration flag.
+_NARRATION_NOTE = (
+    "\n\nAs you work, say one plain sentence of your reasoning before each "
+    "meaningful edit — what you are trying and why — even during an autonomous "
+    "run. Keep it to a sentence, and do not narrate reads or routine checks."
+)
+
+
 def build_command(
-    mode: ChatMode, context: str = "", model: str = DEFAULT_MODEL
+    mode: ChatMode,
+    context: str = "",
+    model: str = DEFAULT_MODEL,
+    narrate: bool = True,
 ) -> list[str]:
     """Build the ``claude`` argv for the persistent streaming session.
 
@@ -165,6 +178,8 @@ def build_command(
         context: The current fragment listing to seed. Used only when the mode
             primes state; ignored otherwise.
         model: The Claude model alias to run (haiku, sonnet, opus, or a full id).
+        narrate: Append the narration note so the agent speaks a one-line
+            rationale before each edit. On by default; off for a quiet run.
 
     Returns:
         The argument list to spawn.
@@ -172,6 +187,8 @@ def build_command(
     prompt = mode.system_prompt
     if mode.prime_context and context:
         prompt += f"\n\nCurrent fragments (use these node ids directly):\n{context}"
+    if narrate:
+        prompt += _NARRATION_NOTE
     # Block the built-in tools always, plus this mode's redundant MCP lookups.
     disallowed = _BLOCKED_TOOLS
     for tool in mode.blocked_tools:
@@ -268,14 +285,24 @@ def _assistant_events(message: dict) -> list[dict]:
         message: The ``message`` object of an assistant stream-json line.
 
     Returns:
-        One event per non-empty text block and per tool-use block, in order.
+        One event per non-empty text, thinking, and shown tool-use block, in order.
     """
     events: list[dict] = []
+    _log.debug(
+        "assistant blocks: %s", [b.get("type") for b in message.get("content", [])]
+    )
     for block in message.get("content", []):
         if block.get("type") == "text":
             text = block.get("text", "").strip()
             if text:
                 events.append({"kind": "text", "text": text})
+        elif block.get("type") == "thinking":
+            # The model's reasoning, shown as its own dimmed stream. It arrives only
+            # when the model runs with thinking on; otherwise the driver never sees
+            # it. Rendering it adds no tokens — the reasoning is already generated.
+            text = block.get("thinking", "").strip()
+            if text:
+                events.append({"kind": "thinking", "text": text})
         elif block.get("type") == "tool_use":
             name = _short_tool_name(block.get("name", ""))
             # Log every tool call (including hidden ones) so the steps we combine
@@ -300,6 +327,7 @@ async def chat_session(
     mode: ChatMode = DEFAULT_MODE,
     context: str = "",
     model: str = DEFAULT_MODEL,
+    narrate: bool = True,
 ) -> None:
     """Bridge a browser chat panel to one persistent Claude Code process.
 
@@ -312,13 +340,14 @@ async def chat_session(
         mode: The chat mode, which chooses the system prompt and whether to prime.
         context: The current fragment listing to seed when the mode primes.
         model: The Claude model alias to run.
+        narrate: Whether the agent speaks a one-line rationale before each edit.
     """
     await socket.accept()
     # In the primed mode the MCP server must attach the listing to edit results;
     # it is a child of this process, so pass the flag down through the environment.
     env = {**os.environ, _PRIME_ENV: "1"} if mode.prime_context else None
     proc = await asyncio.create_subprocess_exec(
-        *build_command(mode, context, model),
+        *build_command(mode, context, model, narrate),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
