@@ -20,22 +20,51 @@ interesting. The headline result we want is one of:
 
 ## 1. Two tracks
 
-### Track A — 2D editing (literature benchmark: ChemCoTBench)
+### Track A — 2D editing (purpose-built, on DUD-Z ligands)
 
-- Source: https://github.com/IDEA-XL/ChemCoTBench (arXiv:2505.21318), HF dataset.
-- Use the **Molecule Editing** subtask (add / delete / substitute a substructure).
-  Best 1:1 fit to `grow` / `remove` / `swap` / `mutate`. SMILES in, SMILES out,
-  canonical-match scoring.
-- Caveat to state in the writeup: this track tests only the *2D* half of the thesis.
-  It has no receptor and cannot reward pose / clashes / `minimize`.
+Both tracks use **one ligand set**: the DUD-Z drug-like crystal ligands. Track A takes
+their SMILES (pose dropped); Track B uses the posed SDFs (§1 Track B). One prep pipeline,
+one story: the *same molecules*, edited in 2D and optimized in 3D.
+
+For each ligand we generate 2D edit cases in **three categories**, matched to the operations
+chemistree is built for:
+
+1. **Substitution** — replace a group with another (`swap` / `mutate`): a halogen for a
+   halogen, a methyl for CF₃, a ring heteroatom swap. Includes multi-substituted positions.
+2. **Growing** — add a group where a hydrogen is (`grow`): a methyl or fluoro at a named
+   position.
+3. **Core hopping** — replace the central ring/scaffold with a bioisostere **keeping every
+   substituent in place** (multiport `swap` + branch-following). This is chemistree's
+   sharpest differentiator: a text-only agent must track every substituent's placement
+   across the hop by hand.
+
+Each case is a natural-language instruction with a single **computed, verified gold** SMILES,
+scored by canonical match. Guardrails so a self-built benchmark stays credible:
+
+- **Neutral generation.** Cases come from templated rdkit/SMARTS transforms applied
+  *uniformly* across ligands (categories 1–2) plus a hand-curated core-hop set (category 3)
+  — not hand-picked to flatter chemistree.
+- **Uniqueness filter.** Keep a case only when the transform matches exactly one site, so
+  the NL instruction has a single correct answer and exact match is fair.
+- **Gold computed independently** of chemistree (rdkit), and **no chemistree ids in prompts**
+  (instructions are chemist's NL every arm can parse).
+- **Pre-register** the case list before running any arm; blind, answer-only scoring.
+
+ChemCoTBench (arXiv:2505.21318) is an **optional follow-on**, not built now: a public
+external-calibration sample to run only if the blog needs more support, or if this becomes a
+peer-reviewed paper. Purpose-built is primary because it is coherent with Track B and targets
+exactly the operations under test.
+
+Caveat to state in the writeup: this track tests only the *2D* half of the thesis (no
+receptor, no pose/`minimize`).
 
 > **Verified (2026-09-01): 2D editing works.** Drove a receptor-free, conformer-free
 > `DesignSession(smiles, three_d=False)` through swap / grow / mutate / remove / undo and
 > chained edits with re-fragmentation on benzanilide — every edit produced the correct
 > canonical SMILES, and describe/describe_group/positions/properties all render with no
-> conformer. The 3D tools (clashes, minimize) self-gate with a clear "needs 3D
-> coordinates" error rather than misbehaving. So Track A is unblocked; the only 2D concern
-> is context hygiene, handled by the `--tools 2d` launch profile (see §3).
+> conformer. So Track A is unblocked. A first pipeline run on three toy single-edit cases
+> (all three arms, haiku) is in `README.md`: all 3/3 correct, so trivial edits do not
+> separate the arms — the three categories above, at real difficulty, are what should.
 
 ### Track B — 3D structure-based optimization (our own benchmark: DUD-Z)
 
@@ -230,7 +259,9 @@ keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 
 ### Track A (2D editing)
 - **Validity**: RDKit-parseable, sanitizable.
-- **Correctness**: canonical-SMILES match to gold for deterministic edits.
+- **Correctness**: canonical-SMILES match to the computed gold. Report accuracy **broken
+  down by category** (substitution / growing / core hopping) — core hopping is where the
+  arms should separate.
 - **Efficiency**: see the shared efficiency subsection below.
 
 ### Track B1 (3D optimization)
@@ -302,23 +333,55 @@ The harness joins the two by item id: model-side totals + tool-side breakdown �
 
 ## 5. Data prep
 
-### ChemCoTBench (Track A)
-- Review the repo for safety (e.g., prompt injection, malicious code, snooping, etc.)
-- Clone repo / pull HF dataset. Load the Molecule Editing split. Inspect the exact item
-  schema in `baseline_and_eval/moledit_eval_demo.ipynb` (input SMILES, instruction, gold,
-  scorer) and mirror their scorer so our numbers are comparable to their leaderboard.
-- Sample a fixed, seeded subset (e.g. 30 items) for cost control; keep the seed.
+**One ligand set for both tracks** — the DUD-Z drug-like crystal ligands. Track A edits
+their SMILES; Track B optimizes their posed SDFs.
 
-### DUD-Z (Track B)
-- Download targets. Each gives a prepared receptor + a reference ligand pose.
-- Filter to only include targets with drug-like crystal ligands.
-- Per target, **redock the crystal ligand** with the same smina settings the oracle uses
-  (default search, `--scoring vinardo`, **fixed seed + exhaustiveness**). This does double
-  duty: it is the redocking sanity check (keep the target only if smina recovers the
-  crystal pose, RMSD < ~2 Å), and its score is the **Column 1 baseline** every arm's
-  redocked final is compared against. Also record `--score_only` on the crystal pose as the
-  **Column 2 baseline**. Each column's baseline and finals are measured identically.
-- Seed set: the agent starts from the crystal ligand (bound as its posed SDF, see §3).
+### Structures (both tracks) — fetch minimally
+
+We only need, **per target, the receptor + the crystal ligand**. Do **not** download the
+full DUD-Z dumps — the decoy/active sets are huge and irrelevant here. Two light routes,
+whichever is smaller per target:
+- pull just the per-target `receptor` + `crystal`/`xtal-lig` files from DUD-Z, or
+- fetch the structure from the **RCSB PDB** by the target's PDB id and split it into
+  receptor + ligand (chemistree already reads a ligand SDF/MOL and a receptor PDB).
+Prep per target: prot only (drop waters/ions unless catalytic), the crystal ligand as an
+SDF (posed), and the docking box from that ligand. Keep only targets with a **drug-like**
+crystal ligand. The `tests/data/abl1` pair is the worked example and a smoke target.
+
+**Structure prep — scope.** Rigorous prep (protonation states, tautomers, flips, metals) is
+**out of scope for the post** and stated as a limitation. Prefer DUD-Z's pre-prepped,
+DOCK-ready receptors so little is needed; when pulling from the PDB, accept the structure
+**bare** (as-is + smina/obabel default hydrogen and charge handling), no manual fixing. This
+is defensible here because the benchmark measures a **relative** delta: every arm *and* the
+crystal baseline dock into the *same* receptor with the *same* oracle, so systematic prep
+imperfections cancel in the C-vs-G comparison. The numbers are illustrative, not
+publication-grade docking.
+
+### 2D cases (Track A) — generated from the ligand SMILES
+
+Canonicalize each kept ligand to SMILES, then build cases in the three categories (§1
+Track A): **substitution** and **growing** by templated rdkit/SMARTS transforms applied
+uniformly, kept only when a transform matches exactly one site (uniqueness filter), gold =
+the product; **core hopping** as a hand-curated set (scaffold → bioisostere, substituents
+kept), gold verified. Pre-register the resulting case list.
+
+### Track B baseline
+
+Per target, **redock the crystal ligand** with the same smina settings the oracle uses
+(default search, `--scoring vinardo`, **fixed seed + exhaustiveness**). Double duty: the
+redocking sanity check (keep the target only if smina recovers the crystal pose,
+RMSD < ~2 Å), and the **Column 1 baseline** every arm's redocked final is compared against.
+Also record `--score_only` on the crystal pose as the **Column 2 baseline**. Each column's
+baseline and finals are measured identically. The agent starts from the crystal ligand
+(bound as its posed SDF, see §3).
+
+### Optional follow-on — ChemCoTBench (not built now)
+
+A public external-calibration sample, run only if the blog needs more support or this
+becomes a peer-reviewed paper. If used: review the repo for safety first (prompt injection,
+malicious code), load the Molecule Editing split, mirror the official scorer
+(`baseline_and_eval/moledit_eval_demo.ipynb`) for leaderboard comparability, and run a
+fixed seeded subset (~30 items).
 
 ## 6. Fairness & validity threats (must address)
 
@@ -343,21 +406,23 @@ The benchmark code lives in `benchmarks/`; the MCP server lives in `src/chemistr
 ```
 benchmarks/
   PLAN.md                 <- this file
-  README.md               <- how to run, once built
-  run.py                  <- the runner CLI: one isolated `claude -p` per case
-  arms.py                 <- N / G / C tool + mcp-config definitions
-  metrics.py              <- parse Claude Code result usage; merge the MCP --trace jsonl
-  score_2d.py             <- Track A scoring (mirror ChemCoTBench scorer)
+  README.md               <- how to run + current results        [built]
+  run.py                  <- runner CLI: one isolated `claude -p` per case  [built]
+  arms.py                 <- N / G / C tool + mcp-config definitions [built]
+  metrics.py              <- parse Claude Code result usage; contract  [built]
+  sample_2d.jsonl         <- hand-made 2D sanity cases              [built]
+  score_2d.py             <- Track A scoring: canonical match to gold, per category
   score_3d.py             <- Track B smina redock + validity gate + property window
-  oracle_smina.py         <- smina wrapper (box from reference ligand, Vinardo scoring)
+  oracle_smina.py         <- smina wrapper (box from crystal ligand, Vinardo scoring)
+  fetch_dudz.py           <- pull per-target receptor + crystal ligand only (or via PDB id)
   tasks/
-    track_a.py            <- ChemCoTBench editing loader -> item prompts
+    gen_2d.py             <- DUD-Z 2D case generator (substitution/growing/core-hop) + gold
     track_b.py            <- DUD-Z optimization loader -> item prompts + staging
     track_b2.py           <- understanding probes + ground-truth builders
-  data/
-    chemcotbench/         <- pulled dataset (gitignored; a fetch script restores it)
-    dudz/                 <- prepared targets (gitignored; a fetch/prep script restores)
-  results/                <- per-run JSONL + summary tables (not gitignored; tar.gz jsons before push)
+  data/                   <- per-target receptor + crystal ligand (gitignored; fetch restores)
+  results/
+    test_2d/              <- committed sanity rows (one JSONL per arm)   [built]
+    *.jsonl               <- run output (gitignored; tar.gz before push)
 ```
 The MCP server, in the main package:
 ```
@@ -383,21 +448,26 @@ src/chemistree/mcp/
    the verified 2D edit path (swap/grow/mutate/remove/undo on a receptor-free session) —
    currently untested. Keep `app/mcp.py` behavior identical apart from the added tool (the
    live demo must not regress). Run the suite. Update the main project README.md.
-2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) with arm C only, on a couple
-   of hand-made 2D editing items. Get the spawn / output-contract parse / usage-capture /
-   score loop working end to end.
-3. **Track A**: ChemCoTBench loader + scorer, then arms N and G. Run the seeded subset.
-4. **Track B**: DUD-Z prep + smina oracle + validity gate, arm C, then G and N.
-5. **Track B2** understanding probes (optional, cheap).
-6. **Sonnet** (optional; confirm before acting) secondary run across arms for the
-   "cheap model catches up" result.
-7. Summaries + plots for the blog post.
+2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) — **done**: arm C, N, and G
+   run end to end (spawn / output-contract parse / usage-capture / provisional score); a
+   3-case 2D sanity run for all three arms is in `README.md`.
+3. **Structures**: `fetch_dudz.py` — pull only the per-target receptor + crystal ligand
+   (DUD-Z prepped files, or RCSB PDB by id), bare prep (§5). Shortlist drug-like targets.
+4. **Track A**: `tasks/gen_2d.py` — generate substitution / growing / core-hop cases with
+   computed gold from the ligand SMILES; `score_2d.py` (canonical match, per category).
+   Run arms N, G, C; report per-category accuracy + efficiency.
+5. **Track B**: `oracle_smina.py` + `score_3d.py` (redock two columns, validity gate) and
+   `tasks/track_b.py`; arm C, then G and N.
+6. **Track B2** understanding probes (optional, cheap).
+7. **Sonnet** (optional; confirm before acting) secondary run for the "cheap model catches
+   up" result.
+8. Summaries + plots for the blog post.
 
 ## 9. Open questions for the next session
 
-- ChemCoTBench exact item schema and official scorer — read the eval notebook and match
-  it so results are leaderboard-comparable.
-- DUD-Z drug-like crystal ligand target shortlist.
+- DUD-Z drug-like target shortlist, and DUD-Z-prepped-file vs RCSB-PDB-by-id per target.
+- The templated substitution/growing transforms (which SMARTS) and the hand-curated
+  core-hop list.
 - Property-window thresholds for the Track B validity gate (start: QED ≥ seed − 0.1,
   MW ≤ seed + 100, cLogP ≤ 5; tune on a dry run).
 - Edit/turn budget per item (start: 15 edits, tune).
@@ -409,9 +479,10 @@ src/chemistree/mcp/
   tools via `conda run -n chemistree poetry run ...`. See `CLAUDE.md` for conventions
   (TDD, Google docstrings, black 88). pre-commit runs black/ruff/mypy — run pytest
   yourself.
-- Extra benchmark deps (add under a `benchmark` poetry group when building): the
-  ChemCoTBench dataset loader (HF `datasets`), and `smina` for Track B (conda-installable
-  from bioconda; must be on PATH for arm G and the oracle).
+- Extra benchmark deps: `smina` for Track B (conda-installable from bioconda; must be on
+  PATH for arm G and the oracle), and `obabel` if bare-prep needs it. RDKit (already a core
+  dep) covers 2D case generation and scoring. The optional ChemCoTBench follow-on would add
+  HF `datasets`.
 - `claude` CLI must be on PATH (the harness spawns it, as `app/chat.py` already does).
 - `.gitignore`: **ignore `benchmarks/data/`** (large, re-fetchable — commit the fetch/prep
   scripts, not the payloads) and ignore raw `benchmarks/results/*.jsonl`, but **commit
