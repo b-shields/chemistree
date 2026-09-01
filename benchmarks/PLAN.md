@@ -413,7 +413,52 @@ fixed seeded subset (~30 items).
 - **Canonicalization** — normalize both sides for match scoring; decide tautomer policy up
   front and apply it uniformly.
 - **Prompt parity** — the task prompt is identical across arms; only the tool list and the
-  system note about available tools differ.
+  system note about available tools differ. Domain guidance is equalized — see below.
+
+### Agent guidance & prompt parity
+
+`app/system_prompt.md` (the demo's tuned prompt) is injected **only by the web app**
+(`chat.py --append-system-prompt`); the standalone `chemistree-mcp` server gives the agent
+only tool docstrings. So the guidance that helps chemistree work well must (a) become part
+of the MCP server, and (b) be equalized across arms so it is not covert coaching. The prompt
+is a **medicinal-chemistry playbook** — much of it is arm-agnostic domain knowledge, not
+chemistree mechanics.
+
+Split the guidance into three buckets:
+- **voice** (app-only): the demo's chat style ("talk like a colleague", never repeat ids,
+  natural paragraphs, never read/write/run files). Irrelevant/harmful for a benchmark that
+  wants a terse `FINAL_SMILES`.
+- **medchem** (shared, tool-agnostic): the medicinal-chemist role; drug-likeness heuristics;
+  ionizable/protonation; the three-tier approach (small functional-group edits → larger
+  fragments → core/scaffold replacement); structure-based-then-empirical; avoid
+  phenol/aniline/>2 Cl/dense substitution; keep a change only if it improves the score.
+- **tools** (chemistree-only): how to read chemistree's output (the affinity / internal-energy
+  / property-profile lines) and when to reach for distance/contacts/clashes/minimize and
+  `describe_group` ports for a core hop. This is the representation's own API — fair to travel
+  with the chemistree arm, like the tool docstrings.
+
+Assembly (one source per bucket, no app change):
+- **App** — leave `app/system_prompt.md` and `chat.py` **exactly as they are**; the demo
+  behaviour is provably unchanged. It keeps its own tuned copy (voice + medchem + tools woven
+  together).
+- **New shared files** (home: `src/chemistree/mcp/guidance/`): `medchem.md` (the shared,
+  tool-agnostic bucket) and `tools.md` (the chemistree tool-usage bucket, with a `{tools}`
+  placeholder). Extract them from the app file's wording so the tuning is preserved; accept
+  the controlled duplication with the app file (a later DRY refactor could have the app
+  assemble from the fragments, guarded by a diff-check — not now).
+- **MCP `chemistree` arm** — the server sets FastMCP `instructions = medchem.md + tools.md`
+  (filled), so `claude mcp add chemistree` is self-contained and any agent gets the guidance.
+- **Baseline arms (N, G)** — `--append-system-prompt` with **`medchem.md` only** (the same
+  tool-agnostic playbook), so the domain knowledge is matched and only the representation
+  differs.
+- **Shared edit budget** — put the cap ("make up to N edits") in `medchem.md`, so all arms get
+  the same budget line (parity + cost control in one place).
+
+**Verify first:** confirm Claude Code actually surfaces a FastMCP server's `instructions` to
+the model (one-shot probe: put a distinctive directive in `instructions` and check the agent
+follows it). If it does not, fall back to injecting `medchem.md + tools.md` via
+`--append-system-prompt` for the chemistree arm in the benchmark, and note the product-side
+gap (the standalone server could not self-describe) for separate follow-up.
 
 ## 7. Proposed repo layout
 
