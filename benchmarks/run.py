@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
-from benchmarks import arms, metrics
+from benchmarks import arms, metrics, oracle_smina
 
 
 def load_items(path: Path) -> list[dict]:
@@ -39,18 +40,38 @@ def load_items(path: Path) -> list[dict]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
-def build_prompt(arm: arms.Arm, item: dict) -> str:
-    """The task prompt for one case, tailored to whether the arm has the tools.
+_CONTRACT = "End your reply with a line exactly of the form:\nFINAL_SMILES: <smiles>"
+
+
+def is_3d(item: dict) -> bool:
+    """True for a 3D optimization case (carries a ligand file + receptor)."""
+    return "ligand" in item and "receptor" in item
+
+
+def ligand_smiles(item: dict) -> str:
+    """The crystal ligand's canonical SMILES, for the arms that get text only."""
+    return str(Chem.MolToSmiles(Chem.MolFromMolFile(item["ligand"])))
+
+
+def build_prompt(arm: arms.Arm, item: dict, pose_out: Path | None = None) -> str:
+    """The task prompt for one case, tailored to the arm and the track.
 
     Args:
         arm: The arm being run.
-        item: The case, with ``smiles`` and ``instruction``.
+        item: The case.
+        pose_out: Where the chemistree arm writes its final 3D pose (3D only).
 
     Returns:
         The prompt to pass to ``claude -p``.
     """
+    if is_3d(item):
+        return _prompt_3d(arm, item, pose_out)
+    return _prompt_2d(arm, item)
+
+
+def _prompt_2d(arm: arms.Arm, item: dict) -> str:
+    """The 2D editing prompt: bind a SMILES (chemistree) or edit it as text."""
     smiles, instruction = item["smiles"], item["instruction"]
-    contract = "End your reply with a line exactly of the form:\nFINAL_SMILES: <smiles>"
     if arm.uses_chemistree:
         return (
             "Edit a molecule with the chemistree tools.\n"
@@ -58,13 +79,50 @@ def build_prompt(arm: arms.Arm, item: dict) -> str:
             f"2. {instruction}\n"
             "3. Call the smiles tool to read the exact canonical SMILES of the "
             "result.\n"
-            f"{contract}\nUse the SMILES the smiles tool returned."
+            f"{_CONTRACT}\nUse the SMILES the smiles tool returned."
         )
     return (
         "Edit this molecule and give the result as SMILES.\n"
         f"SMILES: {smiles}\n"
         f"Task: {instruction}\n"
-        f"{contract}"
+        f"{_CONTRACT}"
+    )
+
+
+def _prompt_3d(arm: arms.Arm, item: dict, pose_out: Path | None) -> str:
+    """The 3D optimization prompt, tailored to each arm's tools."""
+    instruction = item["instruction"]
+    if arm.uses_chemistree:
+        return (
+            "Lower a ligand's predicted binding affinity with the chemistree tools.\n"
+            f'1. Call bind with molecule "{item["ligand"]}" and receptor '
+            f'"{item["receptor"]}". The listing shows the Predicted affinity '
+            "(Vinardo); lower (more negative) is better.\n"
+            f"2. {instruction} Use contacts and distance to read the pocket, clashes "
+            "to check strain, and minimize a group after an edit that moves atoms; "
+            "re-check the affinity.\n"
+            f'3. Call write_pose with path "{pose_out}" to save your final 3D pose.\n'
+            "4. Call the smiles tool to read the final canonical SMILES.\n"
+            f"{_CONTRACT}"
+        )
+    if arm.uses_chemistree is False and arm.allowed_tools == "Bash":  # generalist
+        smina = os.environ.get("SMINA_BIN", "smina")
+        return (
+            "Lower a ligand's predicted binding affinity to a receptor. You have "
+            "Bash with rdkit (python) and smina.\n"
+            f"Ligand SDF: {item['ligand']}\nReceptor: {item['receptor']}\n"
+            f"Score a candidate with:\n  {smina} --receptor {item['receptor']} "
+            f"--ligand <candidate.sdf> --autobox_ligand {item['ligand']} "
+            "--scoring vinardo --score_only\n"
+            f"Task: {instruction}\n"
+            f"{_CONTRACT}"
+        )
+    return (  # naked
+        "A ligand binds a protein target. Propose an analog with better predicted "
+        "binding affinity by editing its structure.\n"
+        f"SMILES: {ligand_smiles(item)}\n"
+        f"Task: {instruction}\n"
+        f"{_CONTRACT}"
     )
 
 
@@ -123,7 +181,10 @@ def run_case(
         mcp_config.write_text(
             json.dumps(arms.chemistree_mcp_config(arm.tools_profile, str(trace_path)))
         )
-    command = build_command(arm, build_prompt(arm, item), model, mcp_config)
+    pose_out = None
+    if is_3d(item) and arm.uses_chemistree:
+        pose_out = workdir / f"pose_{item['id']}.sdf"
+    command = build_command(arm, build_prompt(arm, item, pose_out), model, mcp_config)
 
     row: dict = {"id": item["id"], "arm": arm.name, "model": model}
     start = time.time()
@@ -146,12 +207,42 @@ def run_case(
     row["status"] = "ok" if final else "no_final_smiles"
     if trace_path is not None and trace_path.exists():
         row["trace"] = str(trace_path)
-    if "gold" in item:  # provisional match; the real scorer is score_2d.py
+    if is_3d(item):
+        row.update(_score_3d(arm, item, final, pose_out, workdir))
+    elif "gold" in item:  # provisional match; the real scorer is score_2d.py
         row["gold"] = item["gold"]
         row["correct"] = canonical(final) is not None and canonical(final) == canonical(
             item["gold"]
         )
     return row
+
+
+def _score_3d(
+    arm: arms.Arm, item: dict, final: str | None, pose_out: Path | None, workdir: Path
+) -> dict:
+    """Score a 3D case with smina: redock (Column 1) and, for arm C, the pose (2).
+
+    Args:
+        arm: The arm being scored.
+        item: The 3D case (ligand, receptor).
+        final: The arm's final SMILES, or None.
+        pose_out: The chemistree arm's written pose SDF, or None.
+        workdir: Directory for smina's scratch files.
+
+    Returns:
+        Scoring fields to merge onto the result row (None where smina had nothing).
+    """
+    receptor, ligand = item["receptor"], item["ligand"]
+    baseline = oracle_smina.redock(ligand_smiles(item), receptor, ligand, workdir)
+    final_aff = oracle_smina.redock(final, receptor, ligand, workdir) if final else None
+    out: dict = {"redock_baseline": baseline, "redock_final": final_aff}
+    if baseline is not None and final_aff is not None:
+        out["redock_delta"] = round(final_aff - baseline, 2)
+        out["improved"] = final_aff < baseline
+    if arm.uses_chemistree and pose_out is not None and pose_out.exists():
+        out["pose_final"] = oracle_smina.score_pose(str(pose_out), receptor)
+        out["pose_baseline"] = oracle_smina.score_pose(ligand, receptor)
+    return out
 
 
 def main() -> None:
@@ -196,9 +287,13 @@ def main() -> None:
             row = run_case(arm, item, args.model, args.timeout, workdir)
             handle.write(json.dumps(row) + "\n")
             handle.flush()
+            extra = (
+                f"Δaffinity={row.get('redock_delta')}"
+                if "redock_delta" in row
+                else f"correct={row.get('correct')}"
+            )
             print(
-                f"[{row['status']}] {row['id']} ({arm.name}) "
-                f"final={row.get('final_smiles')} "
+                f"[{row['status']}] {row['id']} ({arm.name}) {extra} "
                 f"footprint={row.get('context_footprint')} "
                 f"cost=${row.get('cost_usd')}"
             )

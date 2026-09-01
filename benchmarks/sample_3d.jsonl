@@ -1,0 +1,1 @@
+{"id": "abl1", "ligand": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Make a few edits to lower the predicted Vinardo binding affinity (more negative is better) while keeping the molecule drug-like."}
