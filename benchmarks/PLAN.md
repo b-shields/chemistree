@@ -76,9 +76,11 @@ covers. It is the differentiator.
 
 ## 3. Architecture: how an agent gets chemistree (the `claude mcp add` question)
 
-**Recommendation: build a standalone in-process MCP server. It is both the benchmark
-harness's tool surface *and* the demo pitch ("`claude mcp add` and any agent understands
-structure"). Prefer it over the SDK headless harness.**
+**Recommendation: build a standalone in-process MCP server, driven by a runner CLI that
+spawns one isolated `claude -p` per case. The server is both the benchmark's tool surface
+*and* the demo pitch ("`claude mcp add` and any agent understands structure"). Rejected
+alternatives — an SDK in-process harness and a Bash-CLI tool surface — are discussed
+below.**
 
 ### Why the current MCP server is not enough
 
@@ -89,8 +91,9 @@ agent" and unusable for per-item molecule loading in a benchmark.
 
 ### What to build: `chemistree-mcp`, a self-contained server the agent binds into
 
-A new module `src/chemistree/mcp_server.py` (public API — no `app.` prefix; it is a
-first-class product surface, not part of the web app) that:
+A new package `src/chemistree/mcp/` (public API — no `app.` prefix; it is a first-class
+product surface, not part of the web app), with `chemistree/mcp/server.py` as the
+standalone in-process server that:
 
 1. Starts **empty** — no molecule pre-loaded. It holds a single mutable session slot.
 2. Exposes a **`bind` tool** the agent (or the harness's first prompt) calls to set the
@@ -98,17 +101,16 @@ first-class product surface, not part of the web app) that:
    `bind(molecule: str, receptor: str | None = None) -> str` where `molecule` is a SMILES
    string or an SDF/MOL path and `receptor` is an optional PDB path. It constructs a
    `DesignSession` in-process, replacing any current one, and returns `describe()` so the
-   agent immediately sees the group listing. Binding again resets — so one long-lived
-   server handles many molecules (fast for benchmarking, natural for the demo).
+   agent immediately sees the group listing. Binding again resets. `claude -p --mcp-config`
+   launches this server as a **fresh stdio child per case** (as the web app already does
+   per chat connection), so each benchmark case gets an isolated session for free — no
+   lifecycle to manage, no cross-case leakage.
 3. All other tools call `commands.run_command(session, text)` **directly — no HTTP**.
    `run_command` is already the reusable core (the web route and the app MCP server both
    go through it), so the tool bodies are one-liners. They error clearly until `bind` is
    called.
-4. Ships a poetry script: `chemistree-mcp = "chemistree.mcp_server:main"`.
-5. Optional `CHEMISTREE_STATE_OUT` env path: on each edit (or on exit) writes the final
-   canonical SMILES, so a benchmark harness reads the answer from a file instead of
-   parsing agent free-text (fragile).
-6. **Benchmark mode** — `--trace <path.jsonl>` / `CHEMISTREE_TRACE`: append one JSON
+4. Ships a poetry script: `chemistree-mcp = "chemistree.mcp.server:main"`.
+5. **Benchmark mode** — `--trace <path.jsonl>` / `CHEMISTREE_TRACE`: append one JSON
    record per tool call (tool, args, returned string + its char/approx-token size,
    latency, resulting SMILES, bind events). This is the tool-side instrumentation of §4's
    efficiency accounting — the per-tool context breakdown the model-side usage can't give.
@@ -120,7 +122,14 @@ claude mcp add chemistree -- chemistree-mcp
 # then: "bind O=C(Nc1ccccc1)c1ccccc1 and swap the left phenyl for a pyridine"
 ```
 
-### The 2D/3D tool split (verified) and how to toggle it
+**Full tool parity with the web app demo.** `chemistree/mcp/server.py` exposes the *same
+complete tool set* the demo uses — describe, describe_group, smiles, swap, grow, mutate,
+remove, undo, distance, contacts, clashes, minimize — plus `bind`. Same `mcp/tools.py`
+source, so
+arm C gets exactly the capabilities the demo shows off. This full set is the **default**
+(`--tools all`).
+
+### The 2D/3D tool split (verified) and an optional stripping profile
 
 Confirmed empirically (see "Verified" box in §1-notes below): the tools fall into three
 tiers by what the bound molecule carries.
@@ -136,64 +145,83 @@ tiers by what the bound molecule carries.
 no conformer they raise `"...needs a ligand with 3D coordinates"` — so a wrong call is
 safe, never silently wrong.
 
-**But self-gating does not stop context pollution:** MCP clients enumerate a server's
-tools once at connection, so 3D tools a 2D task never uses still consume prompt budget and
-invite misuse. Dynamically hiding tools mid-session after `bind` is **not** reliably
-supported (the client caches the tool list). So the toggle is a **launch-time tool
-profile**, not in-session:
-- `chemistree-mcp --tools 2d` — register only the 2D editing set. Use for Track A so the
-  agent's context is not polluted with pocket/pose tools it can't use.
-- `chemistree-mcp` (default) — register everything; the 3D tools self-gate until a
-  conformer/receptor is bound.
-
-(If a future MCP feature makes per-session tool lists dynamic, `bind` could set the tier
-live; until then, launch profile is the honest mechanism.)
+Default is the **full set** (parity with the demo); the 3D tools self-gate until a
+conformer/receptor is bound. An **optional** `--tools 2d` profile registers only the 2D
+editing set — not the prescribed Track A default, but useful as an **ablation**: run
+Track A both ways to measure how much the extra (unusable, on a receptor-free molecule)
+3D tool schemas cost in context. That delta is itself an efficiency result. Note MCP
+clients enumerate tools once at connection, so the profile must be a **launch-time**
+choice, not toggled in-session after `bind` (the client caches the tool list).
 
 ### Refactor to avoid duplicating tool docstrings
 
 The tool docstrings **are** the agent's understanding of chemistree — they must have one
-source of truth. Factor the tool set into `src/chemistree/mcp_tools.py` that registers
+source of truth. Factor the tool set into `src/chemistree/mcp/tools.py` that registers
 all `@mcp.tool` functions onto a passed-in `FastMCP`, given a backend:
 - a `run(text: str, *, with_state: bool) -> str` callable, and
 - a `state() -> dict` callable.
 
 Two backends implement that interface:
-- **in-process** (`mcp_server.py`): `run` = `run_command(session, ...)`, `state` reads
-  the session directly. Used for `claude mcp add` and the benchmark.
+- **in-process** (`chemistree/mcp/server.py`): `run` = `run_command(session, ...)`,
+  `state` reads the session directly. Used for `claude mcp add` and the benchmark.
 - **HTTP** (`app/mcp.py`, unchanged behavior): `run`/`state` hit the web app. Used by the
-  live demo so the viewers update.
+  live demo so the viewers update. It imports `register` from `chemistree.mcp.tools` with
+  an HTTP backend.
 
-Net: one `mcp_tools.py` with all docstrings; two ~20-line entrypoints. `app/mcp.py`
-shrinks to the HTTP backend + `mcp_tools.register(mcp, http_backend)`.
+Net: one `chemistree/mcp/tools.py` with all docstrings; two thin entrypoints. `app/mcp.py`
+shrinks to the HTTP backend + `chemistree.mcp.tools.register(mcp, http_backend)`. The
+demo's `.mcp.json` (which runs `python -m chemistree.app.mcp`) is unchanged.
 
-### Compared to the SDK headless harness (the alternative I first proposed)
+### Alternatives considered and rejected
 
-The headless/Agent-SDK harness (register in-process Python tools, run the agent loop in
-one process) works, but it **re-implements** tool exposure, loses the "it's just an MCP
-server anyone can add" story, and doesn't produce a reusable artifact. Keep it only as a
-fallback if per-item process spawn proves too slow — it will not, for haiku on ~hundreds
-of items, and spawns parallelize trivially.
+- **SDK in-process harness** (register Python tools, run the agent loop in one process):
+  re-implements tool exposure, loses the "just `claude mcp add` it" story, and produces no
+  reusable artifact. The runner-CLI + per-case MCP child gives the same isolation without
+  those costs.
+- **chemistree as a Bash CLI instead of MCP** (agent shells out to a `chemistree` command):
+  forces `Bash` into arm C, blurring the C-vs-G comparison; burns tokens on `--help`
+  discovery; needs a session-state file between calls; and abandons the `claude mcp add`
+  demo hook. MCP also gives the leaner, structured tool surface the efficiency story wants.
 
-### Per-item execution model (both tracks)
+### Per-item execution model: a runner CLI, one isolated `claude -p` per case
 
-Fresh process per item = fresh session = no cross-contamination:
+The harness is a **small CLI** (`benchmarks/run.py`) that runs headless Claude Code once per
+case. Each `claude -p --mcp-config` spawns its own MCP-server child, so every case is a
+fully isolated context session and **100% of the tokens are that process's** — attributed
+per case with confidence (the MCP server runs no model). This is the whole reason the
+runner is enough on its own; we do not need STATE_OUT files or a persistent server.
+
 ```
 for item in dataset:
     (Track B) stage tmp receptor.pdb + define the docking box from the reference ligand
-    spawn:  claude -p "<task prompt naming the SMILES/receptor to bind, then the task>" \
+    spawn:  claude -p "<task: bind this SMILES[/receptor], do X, end with FINAL_SMILES:>" \
               --mcp-config <arm's mcp config> \
               --allowedTools <arm's tools> --disallowedTools <rest> \
               --model haiku --output-format stream-json
-            with env CHEMISTREE_STATE_OUT=tmp_out.smi
-    # the agent's first action is bind(<smiles>[, receptor]); then it edits
-    wait; read final SMILES from CHEMISTREE_STATE_OUT (fallback: agent's stated answer)
-    score (see §4); record tokens/turns/wall-time from the result line
+    # single call per case: the agent binds, edits, and must emit the answer itself
+    wait; parse FINAL_SMILES from the agent's reply (the output contract)
+    capture the final `result` line's usage (see §4 efficiency)
+    score (see §4)
 ```
-The molecule reaches the agent **through the task prompt + `bind`**, not env vars — the
-harness never has to reconfigure the server. Arm C uses `--tools 2d` for Track A.
-Arm N: no `--mcp-config`, all tools disallowed. Arm G: no chemistree MCP, `Bash`
-allowed, a staged workdir holding the receptor/ligand + smina on PATH. Reuse the
-`build_command`-style flags from `app/chat.py` as the template.
+
+**Output contract + single-call-or-fail.** The task requires the agent to finish with a
+machine-parseable line — `FINAL_SMILES: <smiles>` (Track A/2D) or the improved structure
+(Track B). The runner parses it; **no parseable SMILES, or (Track B) no lower-energy /
+valid pose → the case is a failure.** This cleanly handles arms that flail and needs no
+side-channel state file.
+
+To make that line trustworthy, arm C's agent gets the exact string from the server rather
+than hand-transcribing it: the existing **`smiles` tool** (already in the demo set —
+returns the current canonical SMILES) is the "get_smiles" read the contract needs. The
+task prompt tells the agent to call `smiles` and paste its output after `FINAL_SMILES:`.
+(Arms N/G have no such tool, so they emit their own string — a fair difference: reliably
+reporting the actual structure is part of what a good tool surface buys.)
+
+The molecule reaches the agent **through the task prompt + `bind`**, not env vars.
+Arm C: full chemistree tool set (`--tools all`, demo parity); optional `--tools 2d`
+ablation run on Track A. Arm N: no `--mcp-config`, all tools disallowed. Arm G: no
+chemistree MCP, `Bash` allowed, a staged workdir holding the receptor/ligand + smina on
+PATH. Reuse the `build_command`-style flags from `app/chat.py` as the template.
 
 (A single long-lived server also works since `bind` resets per item, but fresh-per-item
 keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
@@ -300,45 +328,50 @@ The harness joins the two by item id: model-side totals + tool-side breakdown �
 
 ## 7. Proposed repo layout
 
+The benchmark code lives in `benchmarks/`; the MCP server lives in `src/chemistree/mcp/`.
+
 ```
 benchmarks/
   PLAN.md                 <- this file
   README.md               <- how to run, once built
-  data/
-    chemcotbench/         <- pulled dataset (gitignored; a fetch script restores it)
-    dudz/                 <- prepared targets (gitignored; a fetch/prep script restores)
-  harness/
-    run.py                <- per-item spawn loop, arm config, result capture
-    metrics.py            <- parse Claude Code result usage; merge the MCP --trace jsonl
-    arms.py               <- N / G / C tool + mcp-config definitions
-    score_2d.py           <- Track A scoring (mirror ChemCoTBench scorer)
-    score_3d.py           <- Track B smina redock + validity gate + property window
-    oracle_smina.py       <- smina wrapper (box from reference ligand, Vina scoring)
+  run.py                  <- the runner CLI: one isolated `claude -p` per case
+  arms.py                 <- N / G / C tool + mcp-config definitions
+  metrics.py              <- parse Claude Code result usage; merge the MCP --trace jsonl
+  score_2d.py             <- Track A scoring (mirror ChemCoTBench scorer)
+  score_3d.py             <- Track B smina redock + validity gate + property window
+  oracle_smina.py         <- smina wrapper (box from reference ligand, Vina scoring)
   tasks/
     track_a.py            <- ChemCoTBench editing loader -> item prompts
     track_b.py            <- DUD-Z optimization loader -> item prompts + staging
     track_b2.py           <- understanding probes + ground-truth builders
+  data/
+    chemcotbench/         <- pulled dataset (gitignored; a fetch script restores it)
+    dudz/                 <- prepared targets (gitignored; a fetch/prep script restores)
   results/                <- per-run JSONL + summary tables (gitignored)
 ```
-Plus, in the main package (not under `benchmarks/`):
+The MCP server, in the main package:
 ```
-src/chemistree/mcp_tools.py     <- shared tool registrations (one source of docstrings)
-src/chemistree/mcp_server.py    <- standalone in-process MCP server (chemistree-mcp)
-# app/mcp.py refactored to the HTTP backend using mcp_tools.register(...)
+src/chemistree/mcp/
+  tools.py                <- shared tool registrations (one source of docstrings)
+  server.py               <- standalone in-process MCP server (chemistree-mcp: bind,
+                             --tools profile, --trace benchmark mode)
+# app/mcp.py refactored to the HTTP backend using chemistree.mcp.tools.register(...);
+# the demo's .mcp.json (python -m chemistree.app.mcp) is unchanged.
 ```
 
 ## 8. Build order (suggested)
 
-1. **Standalone MCP server** (`mcp_tools.py` refactor + `mcp_server.py` + `bind` tool +
-   `--tools {2d,all}` launch profile + `--trace` benchmark mode + poetry script). Verify
-   by hand: `claude mcp add`
-   it, ask the agent to `bind` a SMILES (and separately an SDF + receptor from
-   `tests/data/abl1`), describe, and swap a ring; confirm the session mutates and
-   `CHEMISTREE_STATE_OUT` holds the result. Add tests locking the verified 2D edit path
-   (swap/grow/mutate/remove/undo on a receptor-free session) — it is currently untested.
-   Keep `app/mcp.py` behavior identical (the live demo must not regress). Run the suite.
-2. **Harness skeleton** (`harness/run.py` + `arms.py`) with arm C only, on a couple of
-   hand-made 2D editing items. Get the spawn/capture/score loop working end to end.
+1. **MCP server package `chemistree/mcp/`** (`tools.py` refactor + `server.py` with the
+   `bind` tool, full demo tool set, `--tools {all,2d}` profile, `--trace` benchmark mode,
+   and the `chemistree-mcp` poetry script). Verify by hand: `claude mcp add` it, ask the
+   agent to `bind` a SMILES (and separately an SDF + receptor from `tests/data/abl1`),
+   describe, and swap a ring; confirm the session mutates and the agent can report the
+   result SMILES. Add tests locking the verified 2D edit path (swap/grow/mutate/remove/undo
+   on a receptor-free session) — currently untested. Keep `app/mcp.py` behavior identical
+   (the live demo must not regress). Run the suite.
+2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) with arm C only, on a couple
+   of hand-made 2D editing items. Get the spawn / output-contract parse / usage-capture /
+   score loop working end to end.
 3. **Track A**: ChemCoTBench loader + scorer, then arms N and G. Run the seeded subset.
 4. **Track B**: DUD-Z prep + smina oracle + validity gate, arm C, then G and N.
 5. **Track B2** understanding probes (optional, cheap).
