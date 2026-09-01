@@ -80,37 +80,41 @@ ring edits addressed by stable id, and 3D structure-based optimization where a v
 and a scoring signal matter (Track B). Those are the tests that can actually support or
 refute the thesis; this section only confirms the harness measures cleanly.
 
-## 3D test (loop validation) — and why it drove a redesign
+## 3D test (scaffold recovery)
 
-One case: the abl1 ligand + receptor (`tests/data/abl1/`, `sample_3d.jsonl`), model
-**haiku**, task "lower the predicted Vinardo affinity." Scored by an independent **smina
-redock** (`--scoring vinardo`, autobox from the crystal); Δ is vs the redocked-crystal
-baseline (**−12.1** for all arms). Raw rows under [`results/test_3d/`](results/test_3d/).
+One case: abl1 (`tests/data/abl1/`, `sample_3d.jsonl`), model **haiku**. The crystal ligand
+is stripped to its **Murcko scaffold** (coords kept, so it stays posed — `tasks/strip_murcko.py`),
+and each arm is asked to *re-elaborate it into a potent binder*. Scored two ways, both by
+smina Vinardo: **binding** = redock Δ vs the scaffold baseline (redocked scaffold **−11.1**,
+crystal −12.1), and **recovery** = ECFP4 Tanimoto to the crystal ligand (scaffold floor
+**0.328**, perfect rebuild 1.0). Raw rows: [`results/test_3d/`](results/test_3d/).
 
-| Arm | Δaffinity (redock) | Final edit | Turns | Footprint (tok) | Cost |
-|-----|:------------------:|------------|:-----:|----------------:|-----:|
-| naked      | **−0.9** | added a ring methyl + F→Cl | 1  | 13,393  | $0.024 |
-| generalist | −0.1 | F→Br                          | 17 | 442,034 | $0.181 |
-| chemistree | 0.0  | none (kept the molecule; `write_pose` tightened the pose, score-only −12.27 vs crystal −11.62) | 19 | 336,249 | $0.084 |
+| Arm | Δaffinity (binding) | Recovery (→crystal) | Turns | Footprint (tok) | Cost | What it did |
+|-----|:-------------------:|:-------------------:|:-----:|----------------:|-----:|-------------|
+| naked      | −0.5 | 0.33 → **0.38** | 1  | 13,409    | $0.026 | guessed a generic F + Cl |
+| generalist | — (failed to dock) | 0.33 → **0.20** (worse) | 9  | 219,314   | $0.140 | mangled the scaffold via SMILES text |
+| chemistree | **−0.9** | 0.33 → 0.35 | 61 | 1,942,769 | $0.352 | added OH toward the pocket; a *different* valid binder |
 
-**The loop works for every arm** — chemistree binds the posed SDF and runs
-contacts/minimize/write_pose; the generalist docks candidates with smina over Bash; naked
-reasons on the SMILES; all three are scored by the same redock. That was the point of the
-run, and it passed.
+### Reading this (n = 1 — illustrative, not conclusive)
 
-**It also exposed a flawed task, which is the useful part.** Starting from the *full*
-crystal (already −12) leaves almost no room to improve except by **adding mass**, which
-redock rewards. So **naked "won"** — one turn, no pocket information — by bolting a methyl
-onto a ring and swapping F→Cl. That is mass-gaming, not structural understanding, and with
-n = 1, a stochastic redock, and no property gate, none of these numbers mean anything about
-the thesis.
+The recovery metric does its job: **no arm can win by bloating**. What the run shows:
 
-**The fix (see `PLAN.md` Track B): a Murcko scaffold-recovery task.** Strip each crystal
-ligand to its Murcko scaffold (systematically, coordinates kept so it stays posed), and ask
-the agent to *re-elaborate* it. Now there is real room to improve, a ground-truth target
-(the crystal), and a **gaming-resistant metric** — similarity/recovery to the crystal
-ligand — that you can only score well on by placing the *right* groups toward the *right*
-residues. That is the task that can actually test whether reading the pocket helps.
+- **chemistree** improved binding the most (−0.9, matching the crystal) and kept a **valid,
+  well-posed** molecule — but it explored a *different* chemotype (added hydroxyls toward
+  the pocket, not the crystal's chlorines), so Tanimoto recovery barely moved. It also
+  **badly over-explored** — 61 tool calls, 1.9M tokens, $0.35 — a clear argument for an
+  edit/turn budget.
+- **the generalist broke the molecule.** Editing SMILES as text with no structural feedback,
+  it produced a final that would not even dock (`Δ=None`) and grew *less* like the crystal
+  (recovery 0.33 → 0.20). That fragility is exactly what a structure-aware representation is
+  meant to prevent.
+- **naked** cheaply guessed a generic F + Cl — highest recovery of the three, but still near
+  the floor and by luck, not pocket reasoning.
 
-Next: build the Murcko stripper + Tanimoto/recovery scoring (Track B), and the DUD-Z 2D
-case generator (Track A) — see `PLAN.md` §8.
+Caveats that keep this from meaning much yet: **n = 1**, **haiku**, a **weak-signal target**
+(abl1's stripped groups are small halogens worth ~1 kcal), and recovery-to-a-*single*-crystal
+is harsh — it penalizes chemistree for finding a different good binder. Report binding and
+recovery side by side and read them together.
+
+Next: more DUD-Z targets (bigger R-groups), an edit/turn budget to rein in cost, and maybe a
+sonnet pass — plus the DUD-Z 2D case generator (Track A). See `PLAN.md` §8.
