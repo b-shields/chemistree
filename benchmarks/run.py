@@ -189,7 +189,12 @@ def canonical(smiles: str | None) -> str | None:
 
 
 def run_case(
-    arm: arms.Arm, item: dict, model: str, timeout: int, workdir: Path
+    arm: arms.Arm,
+    item: dict,
+    model: str,
+    timeout: int,
+    workdir: Path,
+    trace: bool = False,
 ) -> dict:
     """Run one case and return its result row.
 
@@ -198,7 +203,9 @@ def run_case(
         item: The case.
         model: The Claude model alias.
         timeout: Seconds before the case is abandoned.
-        workdir: Directory for the per-case mcp-config and trace files.
+        workdir: Directory for the per-case mcp-config and scratch files.
+        trace: Whether the chemistree server logs a per-tool-call trace (off by
+            default, to avoid the extra disk writes).
 
     Returns:
         A result row: ids, status, metrics, and the final molecule.
@@ -206,11 +213,13 @@ def run_case(
     mcp_config = None
     trace_path = None
     if arm.uses_chemistree:
-        trace_path = workdir / f"trace_{item['id']}.jsonl"
+        if trace:
+            trace_path = workdir / f"trace_{item['id']}.jsonl"
         mcp_config = workdir / f"mcp_{item['id']}.json"
-        mcp_config.write_text(
-            json.dumps(arms.chemistree_mcp_config(arm.tools_profile, str(trace_path)))
+        config = arms.chemistree_mcp_config(
+            arm.tools_profile, str(trace_path) if trace_path else None
         )
+        mcp_config.write_text(json.dumps(config))
     seed_sdf = None
     seed_smiles = None
     pose_out = None
@@ -316,6 +325,12 @@ def main() -> None:
         action="store_true",
         help="Print each case's command without running it.",
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Log the chemistree per-tool-call trace (extra disk writes; off by "
+        "default).",
+    )
     args = parser.parse_args()
 
     arm = arms.ARMS[args.arm]
@@ -337,7 +352,7 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as handle:
         for item in items:
-            row = run_case(arm, item, args.model, args.timeout, workdir)
+            row = run_case(arm, item, args.model, args.timeout, workdir, args.trace)
             handle.write(json.dumps(row) + "\n")
             handle.flush()
             extra = (
