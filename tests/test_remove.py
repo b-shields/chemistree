@@ -43,6 +43,16 @@ def test_remove_takes_a_rings_substituents_with_it():
     assert session.smiles() == _canonical("Nc1ccccc1")
 
 
+def test_remove_reports_the_capped_grow_position():
+    # Diphenylamine: removing one phenyl caps the amine nitrogen with a hydrogen.
+    # remove reports (kept group, that hydrogen id) so a replacement can be grown
+    # right back at the same spot -- growing a methyl there gives N-methylaniline.
+    session = DesignSession("c1ccccc1Nc1ccccc1", three_d=False)
+    kept, position = session.remove(_ring_with_neighbors(session, 1))
+    session.grow(kept, position, "methyl")
+    assert session.smiles() == _canonical("CNc1ccccc1")
+
+
 def test_remove_can_be_undone():
     # Deleting a ring and reverting it must restore the molecule exactly.
     session = DesignSession("c1ccccc1Nc1ccc(O)cc1", three_d=False)

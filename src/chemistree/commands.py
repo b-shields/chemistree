@@ -59,8 +59,12 @@ def run_command(session: DesignSession, text: str) -> str:
         session.mutate(int(node_id), int(position_id), element)
         return f"mutated position {position_id} to {element}"
     if command == "remove":
-        session.remove(int(args[0]))
-        return f"removed group {args[0]}"
+        kept, position = session.remove(int(args[0]))
+        return (
+            f"removed group {args[0]}; group {kept} now has an open hydrogen at "
+            f"position {position} where the group was attached — grow there to "
+            f"replace it"
+        )
     if command == "minimize":
         degrees = float(args[1]) if len(args) > 1 else 0.0
         window = float(args[2]) if len(args) > 2 else 180.0

@@ -282,18 +282,24 @@ class DesignSession:
             self._apply(node, region)
         return position_id
 
-    def remove(self, group_id: int) -> None:
+    def remove(self, group_id: int) -> tuple[int, int]:
         """Delete a group and its subtree, capping the parent with hydrogen.
 
         Args:
             group_id: Id of the group to remove.
+
+        Returns:
+            The ``(group_id, position_id)`` of the capped attachment: the kept
+            group and the hydrogen id where the removed group was attached, so it
+            can be replaced with :meth:`grow`.
 
         Raises:
             ValueError: If the group is the root scaffold.
         """
         node = self.tree.node(group_id)
         with self._edit():
-            self.tree.remove_subtree(node)
+            capped = self.tree.remove_subtree(node)
+        return capped
 
     def distance(self, residue_id: str) -> str:
         """Report how close each group is to a receptor residue.

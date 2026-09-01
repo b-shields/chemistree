@@ -132,7 +132,9 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         """Delete a leaf group, capping its parent with hydrogen.
 
         Use this to prune a terminal group or ring, e.g. "delete the phenol ring".
-        Only a leaf can be removed; an internal linker raises an error.
+        Only a leaf can be removed; an internal linker raises an error. The result
+        names the open hydrogen position left where the group was attached, so you
+        can grow a replacement at that exact spot.
 
         Args:
             node_id: Leaf group to remove (from ``describe``).
