@@ -8,6 +8,7 @@ packages = [{include = "chemistree", from = "src"}]
 
 [tool.poetry.scripts]
 chemistree = "chemistree.app.cli:main"
+chemistree-mcp = "chemistree.mcp.server:main"
 
 [tool.poetry.dependencies]
 python = "^3.14"
