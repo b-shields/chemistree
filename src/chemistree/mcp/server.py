@@ -20,7 +20,7 @@ import time
 from rdkit import Chem
 
 from chemistree.commands import run_command
-from chemistree.mcp import tools
+from chemistree.mcp import guidance, tools
 from chemistree.session import DesignSession
 
 # Env var the chat driver sets so edit results carry the refreshed group listing,
@@ -156,7 +156,10 @@ def build_server(*, profile: str = "all", trace_path: str | None = None):
     backend = SessionBackend(
         prime=os.environ.get(_PRIME_ENV) == "1", trace_path=trace_path
     )
-    mcp = FastMCP("chemistree")
+    # Server-level guidance so `claude mcp add chemistree` self-describes. Clients
+    # surface it to the model as context (soft — see PLAN.md); the benchmark also
+    # delivers it authoritatively via --append-system-prompt.
+    mcp = FastMCP("chemistree", instructions=guidance.chemistree_guidance())
 
     @mcp.tool
     def bind(molecule: str, receptor: str | None = None) -> str:

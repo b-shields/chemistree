@@ -26,6 +26,7 @@ from rdkit.Chem import AllChem
 
 from benchmarks import arms, metrics, oracle_smina
 from benchmarks.tasks import strip_murcko
+from chemistree.mcp import guidance
 
 
 def load_items(path: Path) -> list[dict]:
@@ -125,12 +126,8 @@ def _prompt_3d(
             "Elaborate a scaffold posed in a receptor into a potent binder with the "
             "chemistree tools.\n"
             f'1. Call bind with molecule "{seed_sdf}" and receptor '
-            f'"{item["receptor"]}". The listing shows the Predicted affinity '
-            "(Vinardo); lower (more negative) is better.\n"
-            f"2. {instruction} Use contacts and distance to see which residues each "
-            "position faces, grow/swap substituents toward them, clashes to check "
-            "strain, and minimize a group after an edit that moves atoms; re-check "
-            "the affinity.\n"
+            f'"{item["receptor"]}".\n'
+            f"2. {instruction}\n"
             f'3. Call write_pose with path "{pose_out}" to save your final 3D pose.\n'
             "4. Call the smiles tool to read the final canonical SMILES.\n"
             f"{_CONTRACT}"
@@ -156,8 +153,36 @@ def _prompt_3d(
     )
 
 
+def system_prompt(arm: arms.Arm, item: dict) -> str | None:
+    """The `--append-system-prompt` guidance for one arm, or None.
+
+    Applied to 3D optimization only, where a medchem playbook is relevant. Every
+    arm gets the same tool-agnostic playbook (`medchem`), so domain knowledge is
+    matched; the chemistree arm additionally gets its tool-usage guidance. 2D
+    single-edit cases get no system prompt.
+
+    Args:
+        arm: The arm being run.
+        item: The case.
+
+    Returns:
+        The system-prompt text, or None when no guidance applies.
+    """
+    if not is_3d(item):
+        return None
+    return (
+        guidance.chemistree_guidance()
+        if arm.uses_chemistree
+        else guidance.medchem_guidance()
+    )
+
+
 def build_command(
-    arm: arms.Arm, prompt: str, model: str, mcp_config: Path | None
+    arm: arms.Arm,
+    prompt: str,
+    model: str,
+    mcp_config: Path | None,
+    sys_prompt: str | None = None,
 ) -> list[str]:
     """The ``claude`` argv for one case.
 
@@ -166,11 +191,14 @@ def build_command(
         prompt: The task prompt.
         model: The Claude model alias.
         mcp_config: Path to the arm's ``--mcp-config`` file, or None.
+        sys_prompt: Guidance to append via ``--append-system-prompt``, or None.
 
     Returns:
         The argument list to spawn.
     """
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model]
+    if sys_prompt:
+        cmd += ["--append-system-prompt", sys_prompt]
     if mcp_config is not None:
         cmd += ["--mcp-config", str(mcp_config), "--strict-mcp-config"]
     if arm.allowed_tools:
@@ -229,7 +257,7 @@ def run_case(
         if arm.uses_chemistree:
             pose_out = workdir / f"pose_{item['id']}.sdf"
     prompt = build_prompt(arm, item, seed_sdf, seed_smiles, pose_out)
-    command = build_command(arm, prompt, model, mcp_config)
+    command = build_command(arm, prompt, model, mcp_config, system_prompt(arm, item))
 
     row: dict = {"id": item["id"], "arm": arm.name, "model": model}
     start = time.time()
