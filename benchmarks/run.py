@@ -6,7 +6,9 @@ chemistree arm), so cases never share context and tokens are attributed per case
 Fairness: the **task prompt** (the ``-p`` text) is word-for-word **identical** across
 arms; only the **system prompt** (``--append-system-prompt``) differs, carrying each
 arm's access mechanics and — on decorate — the toggled medchem guidance. Both prompts
-are recorded on each row so parity is auditable.
+are recorded on each row so parity is auditable. Each case runs in an isolated directory
+(the agent's cwd) holding only the staged inputs, so a shell-capable arm cannot read the
+crystal ligand (the answer) or the case files (the answer key).
 
 Three case types, routed by their fields:
 - **edit2d** (Track A): ``smiles`` + ``gold``; FINAL_SMILES, canonical match.
@@ -26,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -144,7 +147,7 @@ def mechanics(
     item: dict,
     bind_target: str,
     receptor: str | None,
-    pose_out: Path | None,
+    pose_out: str | None,
 ) -> str:
     """The per-arm access mechanics (system-prompt layer a), or "" for naked.
 
@@ -215,7 +218,7 @@ def system_prompt(
     item: dict,
     bind_target: str,
     receptor: str | None,
-    pose_out: Path | None,
+    pose_out: str | None,
     guidance_on: bool,
 ) -> str | None:
     """The `--append-system-prompt` text: mechanics + (guidance on decorate), or None.
@@ -274,26 +277,70 @@ def build_command(
 # --- case preparation and execution --------------------------------------------------
 
 
-def prepare_case(item: dict, workdir: Path) -> tuple[str, str, Path | None, str | None]:
-    """Compute the shown SMILES and the load target for a case (arm-independent).
+def prepare_case(item: dict, workdir: Path) -> tuple[str, Path | None, str | None]:
+    """Compute the shown SMILES and the harness-side input paths (arm-independent).
 
     Args:
         item: The case.
         workdir: Directory for the stripped scaffold SDF (decorate only).
 
     Returns:
-        ``(display_smiles, bind_target, seed_sdf, receptor)`` — the SMILES shown to
-        every arm, what the chemistree arm binds, the scaffold SDF (decorate only),
-        and the receptor path (3D only).
+        ``(display_smiles, seed_sdf, receptor_src)`` — the SMILES shown to every arm,
+        the stripped scaffold SDF the harness scores against (decorate only), and the
+        source receptor path (3D only). These stay in the repo/workdir for scoring;
+        the agent only ever sees the staged copies (see :func:`_stage`).
     """
     kind = case_type(item)
     if kind == "decorate":
         seed_sdf = workdir / f"seed_{item['id']}.sdf"
         display = strip_murcko.write_scaffold(item["target"], str(seed_sdf))
-        return display, str(seed_sdf), seed_sdf, item["receptor"]
+        return display, seed_sdf, item["receptor"]
     if kind == "probe":
-        return ligand_smiles(item), item["ligand"], None, item["receptor"]
-    return item["smiles"], item["smiles"], None, None
+        return ligand_smiles(item), None, item["receptor"]
+    return item["smiles"], None, None
+
+
+def _stage(
+    arm: arms.Arm,
+    item: dict,
+    seed_sdf: Path | None,
+    receptor_src: str | None,
+    stage: Path,
+) -> tuple[str, str | None, str | None, Path | None]:
+    """Copy the agent-visible inputs into the isolated run dir; return the arm's paths.
+
+    Only the molecule and receptor the arm may see are copied in (generic names). The
+    agent runs with ``cwd`` set to ``stage`` (see :func:`run_case`), so its shell can
+    reach neither the crystal ligand (the answer) nor the case files (the answer key).
+    The chemistree arm gets absolute staged paths (it has no shell to roam with); the
+    generalist gets relative names, so no repo path is ever leaked to it.
+
+    Args:
+        arm: The arm being run.
+        item: The case.
+        seed_sdf: The scaffold SDF (decorate) to stage as ``scaffold.sdf``, else None.
+        receptor_src: The source receptor path (3D), else None.
+        stage: The isolated run directory to copy inputs into.
+
+    Returns:
+        ``(bind_target, receptor_arg, agent_pose, pose_file)`` — what the agent loads,
+        the receptor path it is given, the path chemistree writes its pose to, and the
+        actual pose file the harness reads back.
+    """
+    kind = case_type(item)
+    if kind == "edit2d":
+        return item["smiles"], None, None, None
+    source = seed_sdf if kind == "decorate" else Path(item["ligand"])
+    name = "scaffold.sdf" if kind == "decorate" else "ligand.sdf"
+    shutil.copy(str(source), stage / name)
+    assert receptor_src is not None
+    shutil.copy(receptor_src, stage / "receptor.pdb")
+    chem = arm.uses_chemistree
+    bind_target = str((stage / name).resolve()) if chem else name
+    receptor_arg = str((stage / "receptor.pdb").resolve()) if chem else "receptor.pdb"
+    pose_file = stage / "pose.sdf" if (chem and kind == "decorate") else None
+    agent_pose = str(pose_file.resolve()) if pose_file else None
+    return bind_target, receptor_arg, agent_pose, pose_file
 
 
 def run_case(
@@ -320,11 +367,13 @@ def run_case(
         The result row.
     """
     kind = case_type(item)
-    display_smiles, bind_target, seed_sdf, receptor = prepare_case(item, workdir)
-    pose_out = (
-        workdir / f"pose_{item['id']}.sdf"
-        if arm.uses_chemistree and kind == "decorate"
-        else None
+    display_smiles, seed_sdf, receptor_src = prepare_case(item, workdir)
+    # Isolated run dir: the agent's cwd holds only what this arm may see, so its shell
+    # cannot reach the crystal ligand (the answer) or the case files (the answer key).
+    stage = workdir / f"stage_{item['id']}_{arm.name}"
+    stage.mkdir(parents=True, exist_ok=True)
+    bind_target, receptor_arg, agent_pose, pose_file = _stage(
+        arm, item, seed_sdf, receptor_src, stage
     )
 
     mcp_config = None
@@ -339,7 +388,9 @@ def run_case(
         mcp_config.write_text(json.dumps(config))
 
     task_prompt = build_prompt(item, display_smiles)
-    sys_prompt = system_prompt(arm, item, bind_target, receptor, pose_out, guidance_on)
+    sys_prompt = system_prompt(
+        arm, item, bind_target, receptor_arg, agent_pose, guidance_on
+    )
     command = build_command(arm, task_prompt, model, mcp_config, sys_prompt)
 
     row: dict = {
@@ -352,7 +403,9 @@ def run_case(
     }
     start = time.time()
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, cwd=str(stage)
+        )
     except subprocess.TimeoutExpired:
         row.update(status="timeout", wall_s=timeout)
         return row
@@ -376,7 +429,7 @@ def run_case(
         row["final_smiles"] = final
         row["status"] = "ok" if final else "no_final_smiles"
         row.update(
-            _score_3d(arm, item, final, seed_sdf, display_smiles, pose_out, workdir)
+            _score_3d(arm, item, final, seed_sdf, display_smiles, pose_file, workdir)
         )
     else:  # edit2d
         final = metrics.parse_final_smiles(reply)
@@ -519,17 +572,19 @@ def _summary(row: dict) -> str:
 def _dry_run(items: list[dict], workdir: Path, guidance_on: bool) -> None:
     """Print the shared task prompt and each arm's system prompt (the parity check)."""
     for item in items:
-        display_smiles, bind_target, _, receptor = prepare_case(item, workdir)
+        display_smiles, seed_sdf, receptor_src = prepare_case(item, workdir)
         print(f"\n===== {item['id']} ({case_type(item)}) =====")
         print("--- TASK PROMPT (identical across arms) ---")
         print(build_prompt(item, display_smiles))
         for arm in arms.ARMS.values():
-            pose_out = (
-                workdir / f"pose_{item['id']}.sdf"
-                if arm.uses_chemistree and case_type(item) == "decorate"
-                else None
+            stage = workdir / f"stage_{item['id']}_{arm.name}"
+            stage.mkdir(parents=True, exist_ok=True)
+            bind_target, receptor_arg, agent_pose, _ = _stage(
+                arm, item, seed_sdf, receptor_src, stage
             )
-            sp = system_prompt(arm, item, bind_target, receptor, pose_out, guidance_on)
+            sp = system_prompt(
+                arm, item, bind_target, receptor_arg, agent_pose, guidance_on
+            )
             print(f"--- SYSTEM PROMPT [{arm.name}] ---")
             print(sp)
 
