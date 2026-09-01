@@ -108,6 +108,11 @@ first-class product surface, not part of the web app) that:
 5. Optional `CHEMISTREE_STATE_OUT` env path: on each edit (or on exit) writes the final
    canonical SMILES, so a benchmark harness reads the answer from a file instead of
    parsing agent free-text (fragile).
+6. **Benchmark mode** — `--trace <path.jsonl>` / `CHEMISTREE_TRACE`: append one JSON
+   record per tool call (tool, args, returned string + its char/approx-token size,
+   latency, resulting SMILES, bind events). This is the tool-side instrumentation of §4's
+   efficiency accounting — the per-tool context breakdown the model-side usage can't give.
+   Off by default; zero overhead when unset.
 
 Then, for any agent — no env plumbing, the agent binds what it's told to work on:
 ```
@@ -203,7 +208,7 @@ keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 - **Minimality**: Tanimoto / MCS to the intended product — did it change *only* what was
   asked (catches chemistree over-editing via re-fragmentation, and catches N/G mangling
   the SMILES).
-- **Efficiency**: tool calls, tokens, wall time.
+- **Efficiency**: see the shared efficiency subsection below.
 
 ### Track B (3D optimization)
 - **Oracle = independent docking**: re-dock the final molecule with **smina** into the
@@ -215,14 +220,52 @@ keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 - **Physical validity gate**: the pose must dock into the box (not fly out), pass a
   strain/clash check, and stay within a **property window** (QED / MW / cLogP guardrails)
   so an arm cannot "win" by bolting on greasy mass. Failing the gate = no credit.
-- **Efficiency**: tokens, turns, wall time.
+- **Efficiency**: see the shared efficiency subsection below.
 
 ### Track B2 (understanding probes)
 - Accuracy vs deterministic ground truth from the prepared complex.
 
+### Efficiency & instrumentation (all tracks) — the context-efficiency win
+
+Context efficiency is a first-class result: if arm C matches G on quality but uses far
+fewer tokens/turns, that is a win worth reporting on its own. Two complementary logs, one
+per side, merged per item by the harness:
+
+**1. Model-side usage — from Claude Code's final `result` line** (works for every arm; it
+is Claude Code's own accounting, tooling-agnostic). One `claude -p "<task>"` runs the
+whole agentic loop and emits a single final `result` whose `usage` is cumulative and whose
+`num_turns` counts the internal tool-call rounds. Capture, per item:
+- `usage.input_tokens`, `usage.cache_creation_input_tokens`, `usage.cache_read_input_tokens`
+  → **context footprint** = the sum of the three (all tokens the model had to process;
+  cache only changes their price, not that they were context).
+- `usage.output_tokens` (with `output_tokens_details.thinking_tokens`).
+- `total_cost_usd` (list price — report alongside the raw footprint; they tell different
+  stories because cache reads are discounted).
+- `num_turns`, `duration_ms`.
+Report the footprint **and** cost; do not collapse to one. This is where C should beat G
+even at quality parity: G feeds raw rdkit/smina stdout back into context each turn, while
+C's `describe`/`describe_group` output is compact and dense.
+
+**2. Tool-side trace — the MCP server's benchmark mode** (arm C only; arm G would need an
+analogous Bash/tool logger, out of scope — its tool cost shows up in G's model-side input
+tokens anyway). The server sees the tool traffic the model-side usage cannot attribute, so
+add a **benchmark mode** to `chemistree-mcp`: `--trace <path.jsonl>` (or env
+`CHEMISTREE_TRACE`). Append one JSON record per tool call:
+- timestamp, tool name, arguments;
+- the returned string and its **size (chars + approx tokens)** — this is exactly the
+  context that tool injected, so it attributes the footprint per tool;
+- call latency; the resulting canonical SMILES (edit trajectory);
+- `bind` events (molecule, receptor, tier).
+This gives the per-tool breakdown ("describe returned N tokens, swap M, ...") and a
+complete, replayable trajectory — useful for debugging *and* for the blog post's
+"chemistree keeps the agent's context small" figure.
+
+The harness joins the two by item id: model-side totals + tool-side breakdown → one row.
+
 ### Reporting
 - Per-arm, per-track tables; paired per-item deltas (same seeds across arms).
-- Headline plots: C vs G at fixed model; haiku-C vs sonnet-G.
+- Headline plots: C vs G at fixed model; haiku-C vs sonnet-G; **context footprint (tokens)
+  and cost per item, C vs G** — the efficiency story stands even where quality ties.
 
 ## 5. Data prep
 
@@ -266,6 +309,7 @@ benchmarks/
     dudz/                 <- prepared targets (gitignored; a fetch/prep script restores)
   harness/
     run.py                <- per-item spawn loop, arm config, result capture
+    metrics.py            <- parse Claude Code result usage; merge the MCP --trace jsonl
     arms.py               <- N / G / C tool + mcp-config definitions
     score_2d.py           <- Track A scoring (mirror ChemCoTBench scorer)
     score_3d.py           <- Track B smina redock + validity gate + property window
@@ -286,7 +330,8 @@ src/chemistree/mcp_server.py    <- standalone in-process MCP server (chemistree-
 ## 8. Build order (suggested)
 
 1. **Standalone MCP server** (`mcp_tools.py` refactor + `mcp_server.py` + `bind` tool +
-   `--tools {2d,all}` launch profile + poetry script). Verify by hand: `claude mcp add`
+   `--tools {2d,all}` launch profile + `--trace` benchmark mode + poetry script). Verify
+   by hand: `claude mcp add`
    it, ask the agent to `bind` a SMILES (and separately an SDF + receptor from
    `tests/data/abl1`), describe, and swap a ring; confirm the session mutates and
    `CHEMISTREE_STATE_OUT` holds the result. Add tests locking the verified 2D edit path
