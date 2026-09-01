@@ -246,7 +246,7 @@ def clashes() -> str:
 
     Reports group-group overlaps and, when a receptor is loaded, each group that
     overlaps a residue. Call this after an edit to check whether a new or moved
-    group clashes; if it does, offer to ``rotate`` that group to relieve it.
+    group clashes; if it does, offer to ``minimize`` that group to relieve it.
     """
     return _command("clashes")
 
