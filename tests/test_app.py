@@ -4,8 +4,8 @@ import pytest
 from rdkit import Chem
 
 from chemistree import DesignSession
-from chemistree.app.commands import run_command
 from chemistree.app.render import render_state
+from chemistree.commands import run_command
 
 
 def _canonical(smiles: str) -> str:

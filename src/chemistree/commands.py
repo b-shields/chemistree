@@ -1,4 +1,9 @@
-"""Parse and apply text commands to a design session (the app's command box)."""
+"""Parse and apply text commands to a design session.
+
+The shared command interpreter over a :class:`DesignSession`. It is surfaced by
+both the web app's command box and the MCP tool servers, so it lives in the core
+package with no dependency on either.
+"""
 
 from __future__ import annotations
 
