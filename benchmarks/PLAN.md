@@ -34,6 +34,14 @@ interesting. The headline result we want is one of:
 - Caveat to state in the writeup: this track tests only the *2D* half of the thesis.
   It has no receptor and cannot reward pose / clashes / `minimize`.
 
+> **Verified (2026-09-01): 2D editing works.** Drove a receptor-free, conformer-free
+> `DesignSession(smiles, three_d=False)` through swap / grow / mutate / remove / undo and
+> chained edits with re-fragmentation on benzanilide — every edit produced the correct
+> canonical SMILES, and describe/describe_group/positions/properties all render with no
+> conformer. The 3D tools (clashes, minimize) self-gate with a clear "needs 3D
+> coordinates" error rather than misbehaving. So Track A is unblocked; the only 2D concern
+> is context hygiene, handled by the `--tools 2d` launch profile (see §3).
+
 ### Track B — 3D structure-based optimization (our own benchmark: DUD-Z)
 
 This is the track chemistree is uniquely built for and no public agentic benchmark
@@ -79,28 +87,62 @@ client* of the running FastAPI web app (`CHEMISTREE_URL`). It requires the brows
 up with a pre-configured, fixed session. Unusable for "add chemistree to an arbitrary
 agent" and unusable for per-item molecule loading in a benchmark.
 
-### What to build: `chemistree-mcp`, a self-contained server
+### What to build: `chemistree-mcp`, a self-contained server the agent binds into
 
 A new module `src/chemistree/mcp_server.py` (public API — no `app.` prefix; it is a
 first-class product surface, not part of the web app) that:
 
-1. Reads its molecule at startup from env/args:
-   - `CHEMISTREE_LIGAND` — path to SDF/MOL, or an inline SMILES.
-   - `CHEMISTREE_RECEPTOR` — optional PDB path (enables Vinardo + pocket tools).
-   - `CHEMISTREE_STATE_OUT` — optional path; on shutdown the server writes the final
-     canonical SMILES (+ molblock) there, so the harness reads the answer from a file
-     instead of parsing agent free-text (fragile).
-2. Builds a `DesignSession(ligand, receptor)` **in-process**.
-3. Exposes the same tools, each calling `commands.run_command(session, text)` **directly
-   — no HTTP**. `run_command` is already the reusable core (the web route and the app MCP
-   server both go through it), so the tool bodies are one-liners.
+1. Starts **empty** — no molecule pre-loaded. It holds a single mutable session slot.
+2. Exposes a **`bind` tool** the agent (or the harness's first prompt) calls to set the
+   molecule:
+   `bind(molecule: str, receptor: str | None = None) -> str` where `molecule` is a SMILES
+   string or an SDF/MOL path and `receptor` is an optional PDB path. It constructs a
+   `DesignSession` in-process, replacing any current one, and returns `describe()` so the
+   agent immediately sees the group listing. Binding again resets — so one long-lived
+   server handles many molecules (fast for benchmarking, natural for the demo).
+3. All other tools call `commands.run_command(session, text)` **directly — no HTTP**.
+   `run_command` is already the reusable core (the web route and the app MCP server both
+   go through it), so the tool bodies are one-liners. They error clearly until `bind` is
+   called.
 4. Ships a poetry script: `chemistree-mcp = "chemistree.mcp_server:main"`.
+5. Optional `CHEMISTREE_STATE_OUT` env path: on each edit (or on exit) writes the final
+   canonical SMILES, so a benchmark harness reads the answer from a file instead of
+   parsing agent free-text (fragile).
 
-Then, for any agent:
+Then, for any agent — no env plumbing, the agent binds what it's told to work on:
 ```
-CHEMISTREE_LIGAND=mol.sdf CHEMISTREE_RECEPTOR=rec.pdb \
-  claude mcp add chemistree -- chemistree-mcp
+claude mcp add chemistree -- chemistree-mcp
+# then: "bind O=C(Nc1ccccc1)c1ccccc1 and swap the left phenyl for a pyridine"
 ```
+
+### The 2D/3D tool split (verified) and how to toggle it
+
+Confirmed empirically (see "Verified" box in §1-notes below): the tools fall into three
+tiers by what the bound molecule carries.
+
+| Tier | `bind` gives | Tools available |
+|------|--------------|-----------------|
+| **2D** | SMILES, no conformer | describe, describe_group, smiles, swap, grow, mutate, remove, undo |
+| **3D, no receptor** | + a conformer | + clashes, minimize (intra-only energy) |
+| **3D + receptor** | + a PDB | + distance, contacts, affinity/inter scoring |
+
+`bind` decides the tier per molecule: a receptor → 3D+receptor; otherwise 2D unless a
+`pose=True`/`three_d` flag asks for a conformer. The 3D tools **already self-gate** — with
+no conformer they raise `"...needs a ligand with 3D coordinates"` — so a wrong call is
+safe, never silently wrong.
+
+**But self-gating does not stop context pollution:** MCP clients enumerate a server's
+tools once at connection, so 3D tools a 2D task never uses still consume prompt budget and
+invite misuse. Dynamically hiding tools mid-session after `bind` is **not** reliably
+supported (the client caches the tool list). So the toggle is a **launch-time tool
+profile**, not in-session:
+- `chemistree-mcp --tools 2d` — register only the 2D editing set. Use for Track A so the
+  agent's context is not polluted with pocket/pose tools it can't use.
+- `chemistree-mcp` (default) — register everything; the 3D tools self-gate until a
+  conformer/receptor is bound.
+
+(If a future MCP feature makes per-session tool lists dynamic, `bind` could set the tier
+live; until then, launch profile is the honest mechanism.)
 
 ### Refactor to avoid duplicating tool docstrings
 
@@ -132,18 +174,24 @@ of items, and spawns parallelize trivially.
 Fresh process per item = fresh session = no cross-contamination:
 ```
 for item in dataset:
-    write item.ligand -> tmp.sdf   (+ tmp receptor for Track B)
-    spawn:  claude -p "<task prompt>" \
+    (Track B) stage tmp receptor.pdb + define the docking box from the reference ligand
+    spawn:  claude -p "<task prompt naming the SMILES/receptor to bind, then the task>" \
               --mcp-config <arm's mcp config> \
               --allowedTools <arm's tools> --disallowedTools <rest> \
               --model haiku --output-format stream-json
-            with env CHEMISTREE_LIGAND / _RECEPTOR / _STATE_OUT
-    wait; read final SMILES from CHEMISTREE_STATE_OUT
+            with env CHEMISTREE_STATE_OUT=tmp_out.smi
+    # the agent's first action is bind(<smiles>[, receptor]); then it edits
+    wait; read final SMILES from CHEMISTREE_STATE_OUT (fallback: agent's stated answer)
     score (see §4); record tokens/turns/wall-time from the result line
 ```
+The molecule reaches the agent **through the task prompt + `bind`**, not env vars — the
+harness never has to reconfigure the server. Arm C uses `--tools 2d` for Track A.
 Arm N: no `--mcp-config`, all tools disallowed. Arm G: no chemistree MCP, `Bash`
 allowed, a staged workdir holding the receptor/ligand + smina on PATH. Reuse the
 `build_command`-style flags from `app/chat.py` as the template.
+
+(A single long-lived server also works since `bind` resets per item, but fresh-per-item
+keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 
 ## 4. Scoring & metrics
 
@@ -237,9 +285,12 @@ src/chemistree/mcp_server.py    <- standalone in-process MCP server (chemistree-
 
 ## 8. Build order (suggested)
 
-1. **Standalone MCP server** (`mcp_tools.py` refactor + `mcp_server.py` + poetry script).
-   Verify by hand: `claude mcp add` it against `tests/data/abl1`, ask it to describe and
-   swap a ring, confirm the session mutates and `CHEMISTREE_STATE_OUT` holds the result.
+1. **Standalone MCP server** (`mcp_tools.py` refactor + `mcp_server.py` + `bind` tool +
+   `--tools {2d,all}` launch profile + poetry script). Verify by hand: `claude mcp add`
+   it, ask the agent to `bind` a SMILES (and separately an SDF + receptor from
+   `tests/data/abl1`), describe, and swap a ring; confirm the session mutates and
+   `CHEMISTREE_STATE_OUT` holds the result. Add tests locking the verified 2D edit path
+   (swap/grow/mutate/remove/undo on a receptor-free session) — it is currently untested.
    Keep `app/mcp.py` behavior identical (the live demo must not regress). Run the suite.
 2. **Harness skeleton** (`harness/run.py` + `arms.py`) with arm C only, on a couple of
    hand-made 2D editing items. Get the spawn/capture/score loop working end to end.
