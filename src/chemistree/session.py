@@ -142,6 +142,21 @@ class DesignSession:
         """Canonical SMILES of the current molecule, without explicit hydrogens."""
         return str(Chem.MolToSmiles(Chem.RemoveHs(self.tree.reconstruct())))
 
+    def pose_sdf(self) -> str:
+        """The current 3D pose as one SDF record.
+
+        Returns:
+            A V2000 molblock of the current molecule, with its conformer and
+            explicit hydrogens, plus the ``$$$$`` terminator so the text is a
+            complete SDF record.
+
+        Raises:
+            ValueError: If the ligand lacks 3D coordinates.
+        """
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("write_pose needs a ligand with 3D coordinates")
+        return str(Chem.MolToMolBlock(self.molecule())) + "$$$$\n"
+
     def swap(self, group_id: int, group: str | Chem.Mol) -> None:
         """Replace a group's fragment with a new group.
 

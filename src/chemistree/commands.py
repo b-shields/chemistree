@@ -7,6 +7,8 @@ package with no dependency on either.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from chemistree.session import DesignSession
 
 
@@ -25,6 +27,7 @@ def run_command(session: DesignSession, text: str) -> str:
         distance <residue>
         contacts [dist_cutoff]
         clashes
+        write_pose <path>
 
     Ids come from ``describe`` (the group overview); atom position ids come from
     ``group <id>`` (``describe_group``).
@@ -73,4 +76,8 @@ def run_command(session: DesignSession, text: str) -> str:
         return session.contacts(float(args[0])) if args else session.contacts()
     if command == "clashes":
         return session.clashes()
+    if command == "write_pose":
+        path = Path(args[0])
+        path.write_text(session.pose_sdf())
+        return f"wrote pose to {path}"
     raise ValueError(f"unknown command: {command!r}")

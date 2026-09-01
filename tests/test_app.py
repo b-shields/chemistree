@@ -130,6 +130,15 @@ def test_command_clashes_returns_a_report():
     assert "Clashes" in run_command(session, "clashes")
 
 
+def test_command_write_pose_writes_an_sdf(tmp_path):
+    session = DesignSession("CCc1ccccc1", three_d=True)
+    out = tmp_path / "pose.sdf"
+    message = run_command(session, f"write_pose {out}")
+    text = out.read_text()
+    assert "V2000" in text and text.rstrip().endswith("$$$$")
+    assert str(out) in message
+
+
 def test_command_unknown_raises():
     session = DesignSession("Cc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="unknown command"):

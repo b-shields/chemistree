@@ -626,3 +626,19 @@ def _affinity(describe: str) -> float:
     match = re.search(r"(-?\d+\.\d+)", line)
     assert match is not None
     return float(match.group(1))
+
+
+def test_pose_sdf_exports_the_current_conformer():
+    session = DesignSession("CCc1ccccc1", three_d=True)
+    sdf = session.pose_sdf()
+    assert "V2000" in sdf  # a molblock with a conformer
+    assert sdf.rstrip().endswith("$$$$")  # a complete SDF record
+    posed = Chem.MolFromMolBlock(sdf, removeHs=False)
+    assert posed.GetNumConformers() == 1
+    assert Chem.MolToSmiles(Chem.RemoveHs(posed)) == session.smiles()
+
+
+def test_pose_sdf_requires_3d():
+    session = DesignSession("CCc1ccccc1", three_d=False)
+    with pytest.raises(ValueError, match="3D coordinates"):
+        session.pose_sdf()
