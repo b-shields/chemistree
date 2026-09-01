@@ -26,11 +26,6 @@ interesting. The headline result we want is one of:
 - Use the **Molecule Editing** subtask (add / delete / substitute a substructure).
   Best 1:1 fit to `grow` / `remove` / `swap` / `mutate`. SMILES in, SMILES out,
   canonical-match scoring.
-- Optionally add the **physchem Optimization** subtask (improve QED / LogP / solubility)
-  — cheap RDKit oracles, needs feedback in the loop.
-- **Skip** Understanding, Reactions, and the DRD2/JNK3/GSK3β activity-oracle optimization
-  tasks. The tree buys nothing on retrosynthesis/mechanism, and the activity oracles are
-  QSAR models, not structure — including them dilutes the signal.
 - Caveat to state in the writeup: this track tests only the *2D* half of the thesis.
   It has no receptor and cannot reward pose / clashes / `minimize`.
 
@@ -47,18 +42,15 @@ interesting. The headline result we want is one of:
 This is the track chemistree is uniquely built for and no public agentic benchmark
 covers. It is the differentiator.
 
-- Targets: **DUD-Z / DUDE-Z** (Shoichet lab, property-matched decoys). Chosen because
-  the receptors come prepared and each target ships a crystal/reference ligand pose we
-  can seed from. Pick ~8–12 targets spanning easy/hard pockets.
-- Task shape (**optimization**): seed the session with a known active (or the reference
+- Targets: **DUD-Z** (Shoichet lab). Chosen because the receptors come prepared and each
+  target ships a crystal/reference ligand pose we can seed from.
+- **B1 — optimization**: seed the session with a known active (or the reference
   ligand) posed in the pocket; ask the agent to *improve predicted binding while keeping
   the molecule drug-like and physically valid*. The agent edits; we score the result
-  with an **independent** docking oracle.
-- Optional sub-track **B2 — 3D understanding probes**: deterministic Q&A with ground
-  truth read straight from the prepared complex (e.g. "which residue is closest to the
-  chlorine?", "list the groups that clash", "order these groups by distance to ASP381").
-  Cheap to build, tests "understanding" directly, and only chemistree exposes the 3D
-  view to answer from.
+  with the same scoring function but as implemented via `smina`.
+- **B2 — 3D understanding probes**: deterministic Q&A with ground truth read straight from
+  the prepared complex (e.g. "which residue is closest to the chlorine?", "list the groups
+  that clash").
 
 ## 2. Arms (hold the model fixed; vary only tooling)
 
@@ -68,9 +60,7 @@ covers. It is the differentiator.
 | **G** | generalist | Bash with `rdkit` + (Track B) `smina` | the honest competitor: can code, edit SMILES, dock by hand |
 | **C** | chemistree | chemistree MCP tools only, no Bash | the representation under test |
 
-- Primary model: **haiku**. Secondary run: **sonnet**, all arms, to test claim (2).
-- Optional 4th arm **C+G** (chemistree *and* Bash) to see whether they compose — keep
-  optional, run only if time allows.
+- Primary model: **haiku**. Optional secondary run: **sonnet**, all arms, to test claim (2).
 - Track A real contest: **G(rdkit) vs C**. Track B real contest: **G(rdkit+smina) vs C**
   (arm N is near-floor in 3D since it has no way to score a pose).
 
@@ -99,13 +89,14 @@ standalone in-process server that:
 2. Exposes a **`bind` tool** the agent (or the harness's first prompt) calls to set the
    molecule:
    `bind(molecule: str, receptor: str | None = None) -> str` where `molecule` is a SMILES
-   string or an SDF/MOL path and `receptor` is an optional PDB path. It constructs a
+   string or an SDF path and `receptor` is an optional PDB path. It constructs a
    `DesignSession` in-process, replacing any current one, and returns `describe()` so the
    agent immediately sees the group listing. Binding again resets. `claude -p --mcp-config`
    launches this server as a **fresh stdio child per case** (as the web app already does
    per chat connection), so each benchmark case gets an isolated session for free — no
    lifecycle to manage, no cross-case leakage.
-3. All other tools call `commands.run_command(session, text)` **directly — no HTTP**.
+3. All other tools call `chemistree.commands.run_command(session, text)` **directly — no
+   HTTP**.
    `run_command` is already the reusable core (the web route and the app MCP server both
    go through it), so the tool bodies are one-liners. They error clearly until `bind` is
    called.
@@ -122,12 +113,19 @@ claude mcp add chemistree -- chemistree-mcp
 # then: "bind O=C(Nc1ccccc1)c1ccccc1 and swap the left phenyl for a pyridine"
 ```
 
-**Full tool parity with the web app demo.** `chemistree/mcp/server.py` exposes the *same
-complete tool set* the demo uses — describe, describe_group, smiles, swap, grow, mutate,
-remove, undo, distance, contacts, clashes, minimize — plus `bind`. Same `mcp/tools.py`
-source, so
-arm C gets exactly the capabilities the demo shows off. This full set is the **default**
-(`--tools all`).
+**Full tool parity with the web app demo.** The tool set — describe, describe_group,
+smiles, swap, grow, mutate, remove, undo, distance, contacts, clashes, minimize,
+**write_pose** — plus `bind`, lives in one `mcp/tools.py` source that *both* the standalone
+server and the app's HTTP server register, so arm C and the demo stay identical.
+`write_pose` (export the current 3D pose to an SDF) is added to **both** — it is a useful
+demo feature and the source of Track B1's Column 2. This full set is the **default**
+(`--tools all`). The standalone writes to a server-configured path (env
+`CHEMISTREE_POSE_OUT`) so the runner can read it; the app writes to a chosen location.
+
+**App UI — a Save button.** Add a **Save (SDF)** button in the 3D view controls beside
+`copySmiles`/`copyTrace`. It needs no new endpoint: the 3D molblock is already client-side
+(`latest.molblock`), so the button blobs it as `.sdf` and downloads it (a real local app,
+so browser downloads work). Same pose `write_pose` emits, human-facing.
 
 ### The 2D/3D tool split (verified) and an optional stripping profile
 
@@ -137,13 +135,17 @@ tiers by what the bound molecule carries.
 | Tier | `bind` gives | Tools available |
 |------|--------------|-----------------|
 | **2D** | SMILES, no conformer | describe, describe_group, smiles, swap, grow, mutate, remove, undo |
-| **3D, no receptor** | + a conformer | + clashes, minimize (intra-only energy) |
+| **3D, no receptor** | + a conformer | + clashes, minimize (intra-only energy), write_pose |
 | **3D + receptor** | + a PDB | + distance, contacts, affinity/inter scoring |
 
 `bind` decides the tier per molecule: a receptor → 3D+receptor; otherwise 2D unless a
-`pose=True`/`three_d` flag asks for a conformer. The 3D tools **already self-gate** — with
-no conformer they raise `"...needs a ligand with 3D coordinates"` — so a wrong call is
-safe, never silently wrong.
+`pose=True`/`three_d` flag asks for a conformer. **`bind` preserves an incoming conformer**
+— when given an SDF that already has coordinates it keeps them, and only embeds a fresh
+conformer for a bare SMILES. This matters for Track B: the agent must optimize *from the
+crystal pose*, so it binds the reference **SDF** (posed) + receptor, never a SMILES (which
+would re-embed an arbitrary starting pose). The 3D tools **already self-gate** — with no
+conformer they raise `"...needs a ligand with 3D coordinates"` — so a wrong call is safe,
+never silently wrong.
 
 Default is the **full set** (parity with the demo); the 3D tools self-gate until a
 conformer/receptor is bound. An **optional** `--tools 2d` profile registers only the 2D
@@ -172,16 +174,9 @@ Net: one `chemistree/mcp/tools.py` with all docstrings; two thin entrypoints. `a
 shrinks to the HTTP backend + `chemistree.mcp.tools.register(mcp, http_backend)`. The
 demo's `.mcp.json` (which runs `python -m chemistree.app.mcp`) is unchanged.
 
-### Alternatives considered and rejected
-
-- **SDK in-process harness** (register Python tools, run the agent loop in one process):
-  re-implements tool exposure, loses the "just `claude mcp add` it" story, and produces no
-  reusable artifact. The runner-CLI + per-case MCP child gives the same isolation without
-  those costs.
-- **chemistree as a Bash CLI instead of MCP** (agent shells out to a `chemistree` command):
-  forces `Bash` into arm C, blurring the C-vs-G comparison; burns tokens on `--help`
-  discovery; needs a session-state file between calls; and abandons the `claude mcp add`
-  demo hook. MCP also gives the leaner, structured tool surface the efficiency story wants.
+`run_command` becomes shared, so **move it from `chemistree/app/commands.py` to core
+`chemistree/commands.py`** (it only needs `DesignSession`). Both `app` and `mcp` import it
+from core — no `app`↔`mcp` coupling.
 
 ### Per-item execution model: a runner CLI, one isolated `claude -p` per case
 
@@ -223,6 +218,11 @@ ablation run on Track A. Arm N: no `--mcp-config`, all tools disallowed. Arm G: 
 chemistree MCP, `Bash` allowed, a staged workdir holding the receptor/ligand + smina on
 PATH. Reuse the `build_command`-style flags from `app/chat.py` as the template.
 
+**All 3D arms start from the same posed SDF.** For Track B, arm C binds the reference SDF
+(posed) and arm G gets that same SDF + receptor PDB staged in its workdir — both optimize
+from the identical crystal pose. Arm N (text only, near-floor in 3D) gets the SMILES, as it
+has no way to use coordinates. Track A is SMILES for every arm (no pose needed).
+
 (A single long-lived server also works since `bind` resets per item, but fresh-per-item
 keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 
@@ -230,24 +230,29 @@ keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
 
 ### Track A (2D editing)
 - **Validity**: RDKit-parseable, sanitizable.
-- **Correctness**: canonical-SMILES match to gold for deterministic edits
-  (canonicalize both sides; consider tautomer-insensitive match). For substitution,
-  also accept substructure-constraint satisfaction where the gold is a family.
-- **Minimality**: Tanimoto / MCS to the intended product — did it change *only* what was
-  asked (catches chemistree over-editing via re-fragmentation, and catches N/G mangling
-  the SMILES).
+- **Correctness**: canonical-SMILES match to gold for deterministic edits.
 - **Efficiency**: see the shared efficiency subsection below.
 
-### Track B (3D optimization)
-- **Oracle = independent docking**: re-dock the final molecule with **smina** into the
-  same box and report affinity. Use smina's **Vina** default scoring, *not* Vinardo, so
-  the oracle is not the same function chemistree optimizes against internally (avoid
-  teaching-to-the-test). Report Δaffinity vs the seed.
+### Track B1 (3D optimization)
+Score each final molecule two ways and **report both columns separately** (do not collapse
+them) — the trend between them is itself a result:
+- **Column 1 — smina redock** (fair, arm-agnostic): dock the final SMILES into the
+  reference-ligand box with **smina** (default search, `--scoring vinardo`, fixed seed +
+  exhaustiveness); take the best pose. Δaffinity vs the redocked-crystal baseline (§5).
+  This is the cross-arm number: every arm is scored identically from its SMILES.
+- **Column 2 — chemistree pose** (arm C only): `smina --score_only --scoring vinardo` on
+  the SDF the agent exports via the new **`write_pose`** tool. Δaffinity vs the score-only
+  crystal-pose baseline. This scores the pose chemistree actually maintained/minimized.
+- **Reading the trend**: where Column 2 beats Column 1, smina's stochastic search **missed
+  a minimum chemistree already occupies** (the redock failed, not the molecule); where they
+  agree, the redock is reliable. Column 2 is N/A for arms with no maintained pose (N; G
+  unless it docked) — expected, and itself informative about what keeping a 3D pose buys.
 - **Success**: fraction of items with Δaffinity beyond a threshold, at a fixed edit
-  budget (`success@budget`), plus best-of.
-- **Physical validity gate**: the pose must dock into the box (not fly out), pass a
-  strain/clash check, and stay within a **property window** (QED / MW / cLogP guardrails)
-  so an arm cannot "win" by bolting on greasy mass. Failing the gate = no credit.
+  budget (`success@budget`), plus best-of. Reported per column.
+- **Validity gate**: smina must dock the molecule into the box (a molecule that cannot be
+  posed in-site gets no credit), and it must stay within a **property window** (QED / MW /
+  cLogP guardrails) so an arm cannot "win" by bolting on greasy mass. Failing the gate =
+  no credit.
 - **Efficiency**: see the shared efficiency subsection below.
 
 ### Track B2 (understanding probes)
@@ -298,22 +303,25 @@ The harness joins the two by item id: model-side totals + tool-side breakdown �
 ## 5. Data prep
 
 ### ChemCoTBench (Track A)
+- Review the repo for safety (e.g., prompt injection, malicious code, snooping, etc.)
 - Clone repo / pull HF dataset. Load the Molecule Editing split. Inspect the exact item
   schema in `baseline_and_eval/moledit_eval_demo.ipynb` (input SMILES, instruction, gold,
   scorer) and mirror their scorer so our numbers are comparable to their leaderboard.
-- Sample a fixed, seeded subset (e.g. 200 items) for cost control; keep the seed.
+- Sample a fixed, seeded subset (e.g. 30 items) for cost control; keep the seed.
 
 ### DUD-Z (Track B)
-- Download chosen targets. Each gives a prepared receptor + a reference ligand pose.
-- Per target: define the docking box from the reference ligand; stage `receptor.pdb`
-  (+ pdbqt for smina), `seed_ligand.sdf`. Confirm smina redocks the reference to a sane
-  affinity as a sanity check before using the target.
-- Seed set: use the reference ligand (and/or a few actives) as starting points.
+- Download targets. Each gives a prepared receptor + a reference ligand pose.
+- Filter to only include targets with drug-like crystal ligands.
+- Per target, **redock the crystal ligand** with the same smina settings the oracle uses
+  (default search, `--scoring vinardo`, **fixed seed + exhaustiveness**). This does double
+  duty: it is the redocking sanity check (keep the target only if smina recovers the
+  crystal pose, RMSD < ~2 Å), and its score is the **Column 1 baseline** every arm's
+  redocked final is compared against. Also record `--score_only` on the crystal pose as the
+  **Column 2 baseline**. Each column's baseline and finals are measured identically.
+- Seed set: the agent starts from the crystal ligand (bound as its posed SDF, see §3).
 
 ## 6. Fairness & validity threats (must address)
 
-- **Oracle ≠ optimizer's scorer** — Track B uses Vina-scored smina; chemistree optimizes
-  Vinardo. Non-negotiable.
 - **Equal budgets** — same max edits/turns and comparable token budget across arms.
 - **Anti-gaming guardrails** — property window + pose validity gate (see §4) so affinity
   can't be hacked by mass/lipophilicity.
@@ -321,6 +329,8 @@ The harness joins the two by item id: model-side totals + tool-side breakdown �
   scorer is agnostic to which arm produced it.
 - **Identical staging for G** — arm G must get the *same* receptor/ligand files chemistree
   loads, plus smina on PATH, or the comparison is unfair.
+- **Identical starting pose (3D)** — every pose-using arm (C and G) begins from the same
+  reference **SDF** with its crystal coordinates, never a re-embedded SMILES pose.
 - **Canonicalization** — normalize both sides for match scoring; decide tautomer policy up
   front and apply it uniformly.
 - **Prompt parity** — the task prompt is identical across arms; only the tool list and the
@@ -339,7 +349,7 @@ benchmarks/
   metrics.py              <- parse Claude Code result usage; merge the MCP --trace jsonl
   score_2d.py             <- Track A scoring (mirror ChemCoTBench scorer)
   score_3d.py             <- Track B smina redock + validity gate + property window
-  oracle_smina.py         <- smina wrapper (box from reference ligand, Vina scoring)
+  oracle_smina.py         <- smina wrapper (box from reference ligand, Vinardo scoring)
   tasks/
     track_a.py            <- ChemCoTBench editing loader -> item prompts
     track_b.py            <- DUD-Z optimization loader -> item prompts + staging
@@ -347,7 +357,7 @@ benchmarks/
   data/
     chemcotbench/         <- pulled dataset (gitignored; a fetch script restores it)
     dudz/                 <- prepared targets (gitignored; a fetch/prep script restores)
-  results/                <- per-run JSONL + summary tables (gitignored)
+  results/                <- per-run JSONL + summary tables (not gitignored; tar.gz jsons before push)
 ```
 The MCP server, in the main package:
 ```
@@ -361,29 +371,33 @@ src/chemistree/mcp/
 
 ## 8. Build order (suggested)
 
-1. **MCP server package `chemistree/mcp/`** (`tools.py` refactor + `server.py` with the
-   `bind` tool, full demo tool set, `--tools {all,2d}` profile, `--trace` benchmark mode,
-   and the `chemistree-mcp` poetry script). Verify by hand: `claude mcp add` it, ask the
-   agent to `bind` a SMILES (and separately an SDF + receptor from `tests/data/abl1`),
-   describe, and swap a ring; confirm the session mutates and the agent can report the
-   result SMILES. Add tests locking the verified 2D edit path (swap/grow/mutate/remove/undo
-   on a receptor-free session) — currently untested. Keep `app/mcp.py` behavior identical
-   (the live demo must not regress). Run the suite.
+1. **MCP server package `chemistree/mcp/`**: move `run_command` to core
+   `chemistree/commands.py`; `tools.py` (shared registrations, incl. the new `write_pose`
+   tool) + `server.py` with the `bind` tool, full demo tool set, `--tools {all,2d}` profile,
+   `--trace` benchmark mode, and the `chemistree-mcp` poetry script. Refactor `app/mcp.py`
+   to register from `chemistree.mcp.tools` (HTTP backend) so `write_pose` and the shared
+   set land in the demo too, and add the app **Save (SDF)** button beside
+   `copySmiles`/`copyTrace`. Verify by hand: `claude mcp add` it, `bind` a SMILES (and
+   separately an SDF + receptor from `tests/data/abl1`), describe, swap a ring, `write_pose`;
+   confirm the session mutates and the agent can report the result SMILES. Add tests locking
+   the verified 2D edit path (swap/grow/mutate/remove/undo on a receptor-free session) —
+   currently untested. Keep `app/mcp.py` behavior identical apart from the added tool (the
+   live demo must not regress). Run the suite. Update the main project README.md.
 2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) with arm C only, on a couple
    of hand-made 2D editing items. Get the spawn / output-contract parse / usage-capture /
    score loop working end to end.
 3. **Track A**: ChemCoTBench loader + scorer, then arms N and G. Run the seeded subset.
 4. **Track B**: DUD-Z prep + smina oracle + validity gate, arm C, then G and N.
 5. **Track B2** understanding probes (optional, cheap).
-6. **Sonnet** secondary run across arms for the "cheap model catches up" result.
+6. **Sonnet** (optional; confirm before acting) secondary run across arms for the
+   "cheap model catches up" result.
 7. Summaries + plots for the blog post.
 
 ## 9. Open questions for the next session
 
 - ChemCoTBench exact item schema and official scorer — read the eval notebook and match
   it so results are leaderboard-comparable.
-- DUD-Z target shortlist and whether to seed from the reference ligand only or also from
-  a few actives.
+- DUD-Z drug-like crystal ligand target shortlist.
 - Property-window thresholds for the Track B validity gate (start: QED ≥ seed − 0.1,
   MW ≤ seed + 100, cLogP ≤ 5; tune on a dry run).
 - Edit/turn budget per item (start: 15 edits, tune).
@@ -399,4 +413,7 @@ src/chemistree/mcp/
   ChemCoTBench dataset loader (HF `datasets`), and `smina` for Track B (conda-installable
   from bioconda; must be on PATH for arm G and the oracle).
 - `claude` CLI must be on PATH (the harness spawns it, as `app/chat.py` already does).
-- Keep `data/` and `results/` gitignored; commit fetch/prep scripts, not the payloads.
+- `.gitignore`: **ignore `benchmarks/data/`** (large, re-fetchable — commit the fetch/prep
+  scripts, not the payloads) and ignore raw `benchmarks/results/*.jsonl`, but **commit
+  `benchmarks/results/*.tar.gz`** (tar.gz the run's JSONL before pushing, so the evidence
+  travels with the repo across machines).
