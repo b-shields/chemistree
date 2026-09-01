@@ -28,6 +28,19 @@ python -m benchmarks.run --items benchmarks/sample_2d.jsonl --arm naked --dry-ru
 Flags: `--arm {chemistree,generalist,naked}`, `--model` (default `haiku`), `--out`,
 `--limit`, `--timeout`.
 
+### smina (3D only)
+
+The 3D track scores with **smina**, which cannot go in the `chemistree` env (its openbabel
+dependency conflicts with Python 3.14), so install it in **its own env** and point the
+oracle at the binary:
+
+```bash
+conda create -n smina -c conda-forge smina -y
+export SMINA_BIN="$(conda run -n smina which smina)"   # the runner and generalist arm read this
+```
+
+`claude` must also be on `PATH` (the runner spawns it).
+
 ## 2D test (pipeline sanity)
 
 Three hand-made single-edit cases (`sample_2d.jsonl`), model **haiku**. These are toy
@@ -67,5 +80,37 @@ ring edits addressed by stable id, and 3D structure-based optimization where a v
 and a scoring signal matter (Track B). Those are the tests that can actually support or
 refute the thesis; this section only confirms the harness measures cleanly.
 
-Next: the ChemCoTBench editing loader + official scorer (Track A) and the DUD-Z 3D track
-(Track B) — see `PLAN.md` §8.
+## 3D test (loop validation) — and why it drove a redesign
+
+One case: the abl1 ligand + receptor (`tests/data/abl1/`, `sample_3d.jsonl`), model
+**haiku**, task "lower the predicted Vinardo affinity." Scored by an independent **smina
+redock** (`--scoring vinardo`, autobox from the crystal); Δ is vs the redocked-crystal
+baseline (**−12.1** for all arms). Raw rows under [`results/test_3d/`](results/test_3d/).
+
+| Arm | Δaffinity (redock) | Final edit | Turns | Footprint (tok) | Cost |
+|-----|:------------------:|------------|:-----:|----------------:|-----:|
+| naked      | **−0.9** | added a ring methyl + F→Cl | 1  | 13,393  | $0.024 |
+| generalist | −0.1 | F→Br                          | 17 | 442,034 | $0.181 |
+| chemistree | 0.0  | none (kept the molecule; `write_pose` tightened the pose, score-only −12.27 vs crystal −11.62) | 19 | 336,249 | $0.084 |
+
+**The loop works for every arm** — chemistree binds the posed SDF and runs
+contacts/minimize/write_pose; the generalist docks candidates with smina over Bash; naked
+reasons on the SMILES; all three are scored by the same redock. That was the point of the
+run, and it passed.
+
+**It also exposed a flawed task, which is the useful part.** Starting from the *full*
+crystal (already −12) leaves almost no room to improve except by **adding mass**, which
+redock rewards. So **naked "won"** — one turn, no pocket information — by bolting a methyl
+onto a ring and swapping F→Cl. That is mass-gaming, not structural understanding, and with
+n = 1, a stochastic redock, and no property gate, none of these numbers mean anything about
+the thesis.
+
+**The fix (see `PLAN.md` Track B): a Murcko scaffold-recovery task.** Strip each crystal
+ligand to its Murcko scaffold (systematically, coordinates kept so it stays posed), and ask
+the agent to *re-elaborate* it. Now there is real room to improve, a ground-truth target
+(the crystal), and a **gaming-resistant metric** — similarity/recovery to the crystal
+ligand — that you can only score well on by placing the *right* groups toward the *right*
+residues. That is the task that can actually test whether reading the pocket helps.
+
+Next: build the Murcko stripper + Tanimoto/recovery scoring (Track B), and the DUD-Z 2D
+case generator (Track A) — see `PLAN.md` §8.
