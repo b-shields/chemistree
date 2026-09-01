@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Reproduce the abl1 benchmark mock-up: 2D editing + 3D scaffold decoration
-# (guidance x arm) + 3D understanding probes, for all three arms
-# (chemistree / generalist / naked). Writes uncompressed result rows under
-# benchmarks/results/test_2d and test_3d.
+# Reproduce the abl1 benchmark mock-up. Writes uncompressed result rows under
+# benchmarks/results/test_2d and test_3d:
+#   - 2D editing: all three arms (chemistree / generalist / naked).
+#   - 3D scaffold decoration (guidance x arm) + understanding probes:
+#     chemistree vs generalist only -- naked has no 3D access, so it is dropped.
+# The uniform per-case timeout is overridable via TIMEOUT (default 300s).
 #
 # Requirements:
 #   - the `chemistree` conda env with `poetry install`
@@ -32,19 +34,29 @@ mkdir -p "$RESULTS_2D" "$RESULTS_3D"
 rm -f "$RESULTS_2D"/*.jsonl "$RESULTS_3D"/*.jsonl
 
 C="$REPO/benchmarks/cases"
+# A uniform per-case timeout. A hard subprocess timeout kills the agent mid-run and
+# yields no FINAL_SMILES, so keep it generous enough for the slow decoration cases.
+TIMEOUT="${TIMEOUT:-300}"
+
+# 2D editing -- all three arms (naked is a valid text baseline from the SMILES).
 for arm in naked generalist chemistree; do
-  echo "########## ARM: $arm ##########"
-  echo "--- 2D editing ---"
-  run --items "$C/abl1_2d.jsonl" --arm "$arm" --timeout 300 \
+  echo "########## 2D editing: $arm ##########"
+  run --items "$C/abl1_2d.jsonl" --arm "$arm" --timeout "$TIMEOUT" \
       --out "$RESULTS_2D/${arm}.jsonl"
-  echo "--- 3D understanding probes ---"
-  run --items "$C/abl1_3d_probes.jsonl" --arm "$arm" --timeout 300 \
+done
+
+# 3D probes + scaffold decoration -- chemistree vs generalist only. Naked has no 3D
+# access (SMILES only), so its 3D result is noise and is dropped entirely.
+for arm in generalist chemistree; do
+  echo "########## 3D: $arm ##########"
+  echo "--- understanding probes ---"
+  run --items "$C/abl1_3d_probes.jsonl" --arm "$arm" --timeout "$TIMEOUT" \
       --out "$RESULTS_3D/probes_${arm}.jsonl"
-  echo "--- 3D scaffold decoration (guided) ---"
-  run --items "$C/abl1_3d_decoration.jsonl" --arm "$arm" --timeout 600 \
+  echo "--- scaffold decoration (guided) ---"
+  run --items "$C/abl1_3d_decoration.jsonl" --arm "$arm" --timeout "$TIMEOUT" \
       --out "$RESULTS_3D/decorate_${arm}.jsonl"
-  echo "--- 3D scaffold decoration (no guidance / ablation) ---"
-  run --items "$C/abl1_3d_decoration.jsonl" --arm "$arm" --timeout 600 --no-guidance \
-      --out "$RESULTS_3D/decorate_${arm}_noguid.jsonl"
+  echo "--- scaffold decoration (no guidance / ablation) ---"
+  run --items "$C/abl1_3d_decoration.jsonl" --arm "$arm" --timeout "$TIMEOUT" \
+      --no-guidance --out "$RESULTS_3D/decorate_${arm}_noguid.jsonl"
 done
 echo "########## ALL DONE ##########"
