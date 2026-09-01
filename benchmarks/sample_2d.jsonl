@@ -1,3 +1,0 @@
-{"id": "grow-methyl", "smiles": "c1ccccc1", "instruction": "Add a methyl group to the benzene ring.", "gold": "Cc1ccccc1"}
-{"id": "remove-chloro", "smiles": "Clc1ccccc1", "instruction": "Remove the chlorine substituent, leaving plain benzene.", "gold": "c1ccccc1"}
-{"id": "swap-cf3", "smiles": "Cc1ccccc1", "instruction": "Replace the methyl group with a trifluoromethyl group.", "gold": "FC(F)(F)c1ccccc1"}

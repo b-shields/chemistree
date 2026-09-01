@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 _FINAL_SMILES = re.compile(r"FINAL_SMILES:\s*(\S+)")
+_FINAL_ANSWER = re.compile(r"FINAL_ANSWER:\s*(.+)")
 
 
 def context_footprint(usage: dict) -> int:
@@ -67,3 +68,19 @@ def parse_final_smiles(text: str) -> str | None:
     """
     matches = _FINAL_SMILES.findall(text or "")
     return matches[-1] if matches else None
+
+
+def parse_final_answer(text: str) -> str | None:
+    """The text after the last ``FINAL_ANSWER:`` marker, or None if absent.
+
+    Used by the 3D understanding probes (B2), whose answers are free text, not
+    SMILES.
+
+    Args:
+        text: The agent's final reply text.
+
+    Returns:
+        The answer string (rest of the line, stripped), or None.
+    """
+    matches = _FINAL_ANSWER.findall(text or "")
+    return matches[-1].strip() if matches else None

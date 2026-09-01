@@ -1,14 +1,24 @@
 """Runner CLI: one isolated headless Claude Code invocation per benchmark case.
 
-Each case spawns its own ``claude -p`` (which spawns its own MCP-server child for
-the chemistree arm), so cases do not share context and every token is attributed to
-that case. The agent must end with a ``FINAL_SMILES:`` line; the runner parses it,
-captures the run's token usage, and appends one JSON row per case.
+Each case spawns its own ``claude -p`` (which spawns its own MCP-server child for the
+chemistree arm), so cases never share context and tokens are attributed per case.
+
+Fairness: the **task prompt** (the ``-p`` text) is word-for-word **identical** across
+arms; only the **system prompt** (``--append-system-prompt``) differs, carrying each
+arm's access mechanics and — on decorate — the toggled medchem guidance. Both prompts
+are recorded on each row so parity is auditable.
+
+Three case types, routed by their fields:
+- **edit2d** (Track A): ``smiles`` + ``gold``; FINAL_SMILES, canonical match.
+- **decorate** (Track B1): ``target`` + ``receptor`` — strip to a Murcko scaffold seed;
+  FINAL_SMILES, redock Δ + recovery.
+- **probe** (Track B2): ``ligand`` + ``receptor`` + ``question`` + ``answer`` — the full
+  posed ligand; FINAL_ANSWER, answer match.
 
 Usage::
 
-    python -m benchmarks.run --items benchmarks/sample_2d.jsonl --arm chemistree
-    python -m benchmarks.run --items benchmarks/sample_2d.jsonl --arm naked --dry-run
+    python -m benchmarks.run --items benchmarks/cases/abl1_2d.jsonl --arm naked
+    python -m benchmarks.run --items benchmarks/cases/abl1_3d_decoration.jsonl
 """
 
 from __future__ import annotations
@@ -28,32 +38,51 @@ from benchmarks import arms, metrics, oracle_smina
 from benchmarks.tasks import strip_murcko
 from chemistree.mcp import guidance
 
+_SMILES_CONTRACT = (
+    "End your reply with a line exactly of the form:\nFINAL_SMILES: <smiles>"
+)
+_ANSWER_CONTRACT = (
+    "End your reply with a line exactly of the form:\nFINAL_ANSWER: <answer>"
+)
+_GENERALIST_GUIDANCE = (
+    (Path(__file__).parent / "prompts" / "generalist.md").read_text().strip()
+)
+
 
 def load_items(path: Path) -> list[dict]:
-    """Read a JSONL file of cases.
-
-    Args:
-        path: Path to a file with one JSON object per line. Each needs ``id``,
-            ``smiles``, and ``instruction``; ``gold`` is optional.
-
-    Returns:
-        The parsed cases, in file order.
-    """
+    """Read a JSONL file of cases (one JSON object per line, in file order)."""
     lines = path.read_text().splitlines()
     return [json.loads(line) for line in lines if line.strip()]
 
 
-_CONTRACT = "End your reply with a line exactly of the form:\nFINAL_SMILES: <smiles>"
+def case_type(item: dict) -> str:
+    """The case type: ``decorate`` (B1), ``probe`` (B2), or ``edit2d`` (Track A)."""
+    if "target" in item:
+        return "decorate"
+    if "question" in item:
+        return "probe"
+    return "edit2d"
 
 
-def is_3d(item: dict) -> bool:
-    """True for a 3D scaffold-recovery case (carries a crystal target + receptor)."""
-    return "target" in item and "receptor" in item
+# --- chemistry helpers ---------------------------------------------------------------
 
 
 def target_smiles(item: dict) -> str:
-    """The crystal ligand's canonical SMILES (the recovery target)."""
+    """The crystal ligand's canonical SMILES (a decorate case's recovery target)."""
     return str(Chem.MolToSmiles(Chem.MolFromMolFile(item["target"])))
+
+
+def ligand_smiles(item: dict) -> str:
+    """The full posed ligand's canonical SMILES (a probe case's molecule)."""
+    return str(Chem.MolToSmiles(Chem.MolFromMolFile(item["ligand"])))
+
+
+def canonical(smiles: str | None) -> str | None:
+    """A canonical SMILES, or None when it is missing or unparseable."""
+    if not smiles:
+        return None
+    mol = Chem.MolFromSmiles(smiles)
+    return None if mol is None else str(Chem.MolToSmiles(mol))
 
 
 def tanimoto(smiles: str | None, ref_smiles: str) -> float | None:
@@ -68,115 +97,147 @@ def tanimoto(smiles: str | None, ref_smiles: str) -> float | None:
     )
 
 
-def build_prompt(
-    arm: arms.Arm,
-    item: dict,
-    seed_sdf: Path | None = None,
-    seed_smiles: str | None = None,
-    pose_out: Path | None = None,
-) -> str:
-    """The task prompt for one case, tailored to the arm and the track.
+def answer_matches(expected: str, got: str | None) -> bool:
+    """Whether a probe answer matches, tolerant of case and SMILES canonicalization."""
+    if got is None:
+        return False
+    if expected.strip().lower() == got.strip().lower():
+        return True
+    exp_smiles, got_smiles = canonical(expected), canonical(got)
+    return exp_smiles is not None and exp_smiles == got_smiles
+
+
+# --- prompts -------------------------------------------------------------------------
+
+
+def build_prompt(item: dict, display_smiles: str) -> str:
+    """The task prompt for a case — identical across arms (no arm branch).
 
     Args:
-        arm: The arm being run.
         item: The case.
-        seed_sdf: The posed scaffold the agent starts from (3D only).
-        seed_smiles: The scaffold's SMILES, for the text-only arm (3D only).
-        pose_out: Where the chemistree arm writes its final 3D pose (3D only).
+        display_smiles: The molecule as SMILES, shown to every arm (the full ligand
+            for edit2d/probe, the scaffold for decorate).
 
     Returns:
-        The prompt to pass to ``claude -p``.
+        The ``-p`` text.
     """
-    if is_3d(item):
-        return _prompt_3d(arm, item, seed_sdf, seed_smiles, pose_out)
-    return _prompt_2d(arm, item)
-
-
-def _prompt_2d(arm: arms.Arm, item: dict) -> str:
-    """The 2D editing prompt: bind a SMILES (chemistree) or edit it as text."""
-    smiles, instruction = item["smiles"], item["instruction"]
-    if arm.uses_chemistree:
+    kind = case_type(item)
+    if kind == "decorate":
         return (
-            "Edit a molecule with the chemistree tools.\n"
-            f'1. Call bind with molecule "{smiles}".\n'
-            f"2. {instruction}\n"
-            "3. Call the smiles tool to read the exact canonical SMILES of the "
-            "result.\n"
-            f"{_CONTRACT}\nUse the SMILES the smiles tool returned."
+            "A chemical scaffold is posed in a protein binding pocket. "
+            f"{item['instruction']}\n"
+            f"The scaffold as SMILES: {display_smiles}\n{_SMILES_CONTRACT}"
+        )
+    if kind == "probe":
+        return (
+            f"A ligand is posed in a protein binding pocket. {item['question']}\n"
+            f"The ligand as SMILES: {display_smiles}\n{_ANSWER_CONTRACT}"
         )
     return (
-        "Edit this molecule and give the result as SMILES.\n"
-        f"SMILES: {smiles}\n"
-        f"Task: {instruction}\n"
-        f"{_CONTRACT}"
+        f"{item['instruction']}\n"
+        f"The molecule as SMILES: {display_smiles}\n{_SMILES_CONTRACT}"
     )
 
 
-def _prompt_3d(
+def mechanics(
     arm: arms.Arm,
     item: dict,
-    seed_sdf: Path | None,
-    seed_smiles: str | None,
+    bind_target: str,
+    receptor: str | None,
     pose_out: Path | None,
 ) -> str:
-    """The 3D scaffold-recovery prompt: elaborate a posed scaffold into a binder."""
-    instruction = item["instruction"]
-    if arm.uses_chemistree:
-        return (
-            "Elaborate a scaffold posed in a receptor into a potent binder with the "
-            "chemistree tools.\n"
-            f'1. Call bind with molecule "{seed_sdf}" and receptor '
-            f'"{item["receptor"]}".\n'
-            f"2. {instruction}\n"
-            f'3. Call write_pose with path "{pose_out}" to save your final 3D pose.\n'
-            "4. Call the smiles tool to read the final canonical SMILES.\n"
-            f"{_CONTRACT}"
-        )
-    if arm.uses_chemistree is False and arm.allowed_tools == "Bash":  # generalist
-        smina = os.environ.get("SMINA_BIN", "smina")
-        return (
-            "Elaborate a scaffold posed in a receptor into a potent binder. You have "
-            "Bash with rdkit (python) and smina.\n"
-            f"Scaffold SDF (posed): {seed_sdf}\nReceptor: {item['receptor']}\n"
-            f"Score a candidate with:\n  {smina} --receptor {item['receptor']} "
-            f"--ligand <candidate.sdf> --autobox_ligand {seed_sdf} "
-            "--scoring vinardo --score_only\n"
-            f"Task: {instruction}\n"
-            f"{_CONTRACT}"
-        )
-    return (  # naked
-        "A scaffold binds a protein target. Add substituents to elaborate it into a "
-        "potent, drug-like binder.\n"
-        f"Scaffold SMILES: {seed_smiles}\n"
-        f"Task: {instruction}\n"
-        f"{_CONTRACT}"
-    )
+    """The per-arm access mechanics (system-prompt layer a), or "" for naked.
 
-
-def system_prompt(arm: arms.Arm, item: dict, guidance_on: bool = True) -> str | None:
-    """The `--append-system-prompt` guidance for one arm, or None.
-
-    Applied to 3D optimization only, where a medchem playbook is relevant. Every
-    arm gets the same tool-agnostic playbook (`medchem`), so domain knowledge is
-    matched; the chemistree arm additionally gets its tool-usage guidance. 2D
-    single-edit cases, and the no-guidance ablation, get no system prompt.
+    Says how the arm loads the molecule and its scorer and reports the answer —
+    the file paths live here, not in the identical task prompt.
 
     Args:
         arm: The arm being run.
         item: The case.
-        guidance_on: When False (the ablation), no guidance is appended, isolating
-            the representation from the prompt.
+        bind_target: What the chemistree arm binds (a SMILES for edit2d, else an SDF
+            path); also the SDF path the generalist works from in 3D.
+        receptor: Receptor PDB path (3D cases), or None.
+        pose_out: Where the chemistree arm writes its pose (decorate), or None.
 
     Returns:
-        The system-prompt text, or None when no guidance applies.
+        The mechanics text, or "" (naked works from the task-prompt SMILES).
     """
-    if not guidance_on or not is_3d(item):
-        return None
-    return str(
-        guidance.chemistree_guidance()
-        if arm.uses_chemistree
-        else guidance.medchem_guidance()
-    )
+    kind = case_type(item)
+    if arm.uses_chemistree:
+        if kind == "edit2d":
+            return (
+                f"Edit the molecule with the chemistree tools. Load it: call bind with "
+                f'molecule "{bind_target}". When done, call the smiles tool and report '
+                "its output as the answer."
+            )
+        if kind == "decorate":
+            return (
+                "Edit the molecule with the chemistree tools. Load the posed scaffold: "
+                f'call bind with molecule "{bind_target}" and receptor "{receptor}". '
+                f'When finished, call write_pose with path "{pose_out}", then call the '
+                "smiles tool and report its output as the answer."
+            )
+        return (
+            "Inspect the molecule with the chemistree tools. Load the posed ligand: "
+            f'call bind with molecule "{bind_target}" and receptor "{receptor}". Use '
+            "the tools to determine the answer."
+        )
+    if arm.allowed_tools == "Bash":  # generalist
+        if kind == "edit2d":
+            return "You have a Bash tool with rdkit (python) available."
+        smina = os.environ.get("SMINA_BIN", "smina")
+        noun = "scaffold" if kind == "decorate" else "ligand"
+        text = (
+            f"You have a Bash tool with rdkit (python) and smina. The posed {noun} SDF "
+            f"is {bind_target} and the receptor is {receptor}."
+        )
+        if kind == "decorate":
+            text += (
+                f"\nScore a candidate with:\n  {smina} --receptor {receptor} --ligand "
+                f"<candidate.sdf> --autobox_ligand {bind_target} --scoring vinardo "
+                "--score_only"
+            )
+        return text
+    return ""  # naked
+
+
+def guidance_text(arm: arms.Arm) -> str:
+    """The medchem playbook plus each arm's tool-usage translation (decorate only)."""
+    if arm.uses_chemistree:
+        return str(guidance.chemistree_guidance())
+    if arm.allowed_tools == "Bash":  # generalist
+        return f"{guidance.medchem_guidance()}\n\n{_GENERALIST_GUIDANCE}"
+    return str(guidance.medchem_guidance())  # naked
+
+
+def system_prompt(
+    arm: arms.Arm,
+    item: dict,
+    bind_target: str,
+    receptor: str | None,
+    pose_out: Path | None,
+    guidance_on: bool,
+) -> str | None:
+    """The `--append-system-prompt` text: mechanics + (guidance on decorate), or None.
+
+    Args:
+        arm: The arm being run.
+        item: The case.
+        bind_target: See :func:`mechanics`.
+        receptor: Receptor PDB path, or None.
+        pose_out: Chemistree pose path (decorate), or None.
+        guidance_on: When False (the ablation), the guidance layer is dropped.
+
+    Returns:
+        The system-prompt text, or None when nothing applies.
+    """
+    parts = []
+    mech = mechanics(arm, item, bind_target, receptor, pose_out)
+    if mech:
+        parts.append(mech)
+    if guidance_on and case_type(item) == "decorate":
+        parts.append(guidance_text(arm))
+    return "\n\n".join(parts) if parts else None
 
 
 def build_command(
@@ -190,7 +251,7 @@ def build_command(
 
     Args:
         arm: The arm being run.
-        prompt: The task prompt.
+        prompt: The (identical) task prompt.
         model: The Claude model alias.
         mcp_config: Path to the arm's ``--mcp-config`` file, or None.
         sys_prompt: Guidance to append via ``--append-system-prompt``, or None.
@@ -210,12 +271,29 @@ def build_command(
     return cmd
 
 
-def canonical(smiles: str | None) -> str | None:
-    """A canonical SMILES, or None when it is missing or unparseable."""
-    if not smiles:
-        return None
-    mol = Chem.MolFromSmiles(smiles)
-    return None if mol is None else str(Chem.MolToSmiles(mol))
+# --- case preparation and execution --------------------------------------------------
+
+
+def prepare_case(item: dict, workdir: Path) -> tuple[str, str, Path | None, str | None]:
+    """Compute the shown SMILES and the load target for a case (arm-independent).
+
+    Args:
+        item: The case.
+        workdir: Directory for the stripped scaffold SDF (decorate only).
+
+    Returns:
+        ``(display_smiles, bind_target, seed_sdf, receptor)`` — the SMILES shown to
+        every arm, what the chemistree arm binds, the scaffold SDF (decorate only),
+        and the receptor path (3D only).
+    """
+    kind = case_type(item)
+    if kind == "decorate":
+        seed_sdf = workdir / f"seed_{item['id']}.sdf"
+        display = strip_murcko.write_scaffold(item["target"], str(seed_sdf))
+        return display, str(seed_sdf), seed_sdf, item["receptor"]
+    if kind == "probe":
+        return ligand_smiles(item), item["ligand"], None, item["receptor"]
+    return item["smiles"], item["smiles"], None, None
 
 
 def run_case(
@@ -227,20 +305,28 @@ def run_case(
     trace: bool = False,
     guidance_on: bool = True,
 ) -> dict:
-    """Run one case and return its result row.
+    """Run one case and return its result row (prompts, metrics, and scoring).
 
     Args:
         arm: The arm to run.
         item: The case.
         model: The Claude model alias.
         timeout: Seconds before the case is abandoned.
-        workdir: Directory for the per-case mcp-config and scratch files.
-        trace: Whether the chemistree server logs a per-tool-call trace (off by
-            default, to avoid the extra disk writes).
+        workdir: Directory for the mcp-config and scratch files.
+        trace: Whether the chemistree server logs a per-tool-call trace.
+        guidance_on: When False, the medchem guidance is dropped (the ablation).
 
     Returns:
-        A result row: ids, status, metrics, and the final molecule.
+        The result row.
     """
+    kind = case_type(item)
+    display_smiles, bind_target, seed_sdf, receptor = prepare_case(item, workdir)
+    pose_out = (
+        workdir / f"pose_{item['id']}.sdf"
+        if arm.uses_chemistree and kind == "decorate"
+        else None
+    )
+
     mcp_config = None
     trace_path = None
     if arm.uses_chemistree:
@@ -251,19 +337,19 @@ def run_case(
             arm.tools_profile, str(trace_path) if trace_path else None
         )
         mcp_config.write_text(json.dumps(config))
-    seed_sdf = None
-    seed_smiles = None
-    pose_out = None
-    if is_3d(item):
-        seed_sdf = workdir / f"seed_{item['id']}.sdf"
-        seed_smiles = strip_murcko.write_scaffold(item["target"], str(seed_sdf))
-        if arm.uses_chemistree:
-            pose_out = workdir / f"pose_{item['id']}.sdf"
-    prompt = build_prompt(arm, item, seed_sdf, seed_smiles, pose_out)
-    sys_prompt = system_prompt(arm, item, guidance_on)
-    command = build_command(arm, prompt, model, mcp_config, sys_prompt)
 
-    row: dict = {"id": item["id"], "arm": arm.name, "model": model}
+    task_prompt = build_prompt(item, display_smiles)
+    sys_prompt = system_prompt(arm, item, bind_target, receptor, pose_out, guidance_on)
+    command = build_command(arm, task_prompt, model, mcp_config, sys_prompt)
+
+    row: dict = {
+        "id": item["id"],
+        "arm": arm.name,
+        "model": model,
+        "guidance": guidance_on,
+        "prompt": task_prompt,
+        "system_prompt": sys_prompt,
+    }
     start = time.time()
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
@@ -279,16 +365,24 @@ def run_case(
         return row
 
     row.update(metrics.parse_result(result))
-    final = metrics.parse_final_smiles(result.get("result", ""))
-    row["final_smiles"] = final
-    row["status"] = "ok" if final else "no_final_smiles"
+    reply = result.get("result", "")
     if trace_path is not None and trace_path.exists():
         row["trace"] = str(trace_path)
-    if is_3d(item):
+
+    if kind == "probe":
+        _score_probe(row, item, reply)
+    elif kind == "decorate":
+        final = metrics.parse_final_smiles(reply)
+        row["final_smiles"] = final
+        row["status"] = "ok" if final else "no_final_smiles"
         row.update(
-            _score_3d(arm, item, final, seed_sdf, seed_smiles, pose_out, workdir)
+            _score_3d(arm, item, final, seed_sdf, display_smiles, pose_out, workdir)
         )
-    elif "gold" in item:  # provisional match; the real scorer is score_2d.py
+    else:  # edit2d
+        final = metrics.parse_final_smiles(reply)
+        row["final_smiles"] = final
+        row["status"] = "ok" if final else "no_final_smiles"
+        row["category"] = item.get("category")
         row["gold"] = item["gold"]
         row["correct"] = canonical(final) is not None and canonical(final) == canonical(
             item["gold"]
@@ -296,20 +390,33 @@ def run_case(
     return row
 
 
+def _score_probe(row: dict, item: dict, reply: str) -> None:
+    """Score a B2 understanding probe by matching the answer (mutates ``row``)."""
+    answer = metrics.parse_final_answer(reply)
+    row["answer"] = answer
+    row["expected"] = item["answer"]
+    row["status"] = "ok" if answer else "no_final_answer"
+    row["correct"] = answer_matches(item["answer"], answer)
+
+
 def _score_3d(
     arm: arms.Arm,
     item: dict,
     final: str | None,
     seed_sdf: Path | None,
-    seed_smiles: str | None,
+    seed_smiles: str,
     pose_out: Path | None,
     workdir: Path,
 ) -> dict:
-    """Score a scaffold-recovery case: binding (redock) and recovery (Tanimoto).
+    """Score a decorate case: two binding columns + recovery.
+
+    Column 1 redocks each arm's final SMILES (fair). Column 2 scores the chemistree
+    ``write_pose`` output SDF directly with smina ``--score_only`` — the pose it
+    actually built, not a re-docked one. Recovery is ECFP4 Tanimoto to the crystal.
 
     Args:
         arm: The arm being scored.
-        item: The 3D case (crystal target, receptor).
+        item: The decorate case (crystal ``target``, ``receptor``).
         final: The arm's final SMILES, or None.
         seed_sdf: The posed scaffold the agent started from.
         seed_smiles: The scaffold's SMILES.
@@ -317,16 +424,11 @@ def _score_3d(
         workdir: Directory for smina's scratch files.
 
     Returns:
-        Redock Δ vs the scaffold baseline, and ECFP4 recovery toward the crystal
-        ligand (with the scaffold's floor).
+        Scoring fields to merge onto the row.
     """
     receptor, box = item["receptor"], item["target"]
     target_smi = target_smiles(item)
-    baseline = (
-        oracle_smina.redock(seed_smiles, receptor, box, workdir)
-        if seed_smiles
-        else None
-    )
+    baseline = oracle_smina.redock(seed_smiles, receptor, box, workdir)
     final_aff = oracle_smina.redock(final, receptor, box, workdir) if final else None
     out: dict = {"redock_scaffold": baseline, "redock_final": final_aff}
     if baseline is not None and final_aff is not None:
@@ -355,7 +457,8 @@ def main() -> None:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print each case's command without running it.",
+        help="Print the identical task prompt and every arm's system prompt, without "
+        "running (the parity check).",
     )
     parser.add_argument(
         "--trace",
@@ -366,8 +469,8 @@ def main() -> None:
     parser.add_argument(
         "--no-guidance",
         action="store_true",
-        help="Ablation: skip the --append-system-prompt medchem guidance, to isolate "
-        "the representation from the prompt (3D only).",
+        help="Ablation: skip the medchem guidance layer, isolating the representation "
+        "from the prompt (decorate only).",
     )
     args = parser.parse_args()
 
@@ -375,15 +478,10 @@ def main() -> None:
     items = load_items(Path(args.items))
     if args.limit is not None:
         items = items[: args.limit]
-
     workdir = Path(tempfile.mkdtemp(prefix="chemistree-bench-"))
+
     if args.dry_run:
-        for item in items:
-            print(
-                json.dumps(
-                    build_command(arm, build_prompt(arm, item), args.model, None)
-                )
-            )
+        _dry_run(items, workdir, guidance_on=not args.no_guidance)
         return
 
     out = Path(args.out)
@@ -399,20 +497,41 @@ def main() -> None:
                 args.trace,
                 guidance_on=not args.no_guidance,
             )
-            row["guidance"] = not args.no_guidance
             handle.write(json.dumps(row) + "\n")
             handle.flush()
-            extra = (
-                f"Δaffinity={row.get('redock_delta')} "
-                f"recovery={row.get('recovery_scaffold')}->{row.get('recovery_final')}"
-                if is_3d(item)
-                else f"correct={row.get('correct')}"
+            print(f"[{row['status']}] {row['id']} ({arm.name}) {_summary(row)}")
+
+
+def _summary(row: dict) -> str:
+    """A one-line result summary for the console."""
+    if "redock_delta" in row or row.get("recovery_final") is not None:
+        head = (
+            f"Δaffinity={row.get('redock_delta')} "
+            f"recovery={row.get('recovery_scaffold')}->{row.get('recovery_final')}"
+        )
+    else:
+        head = f"correct={row.get('correct')}"
+    return (
+        f"{head} footprint={row.get('context_footprint')} cost=${row.get('cost_usd')}"
+    )
+
+
+def _dry_run(items: list[dict], workdir: Path, guidance_on: bool) -> None:
+    """Print the shared task prompt and each arm's system prompt (the parity check)."""
+    for item in items:
+        display_smiles, bind_target, _, receptor = prepare_case(item, workdir)
+        print(f"\n===== {item['id']} ({case_type(item)}) =====")
+        print("--- TASK PROMPT (identical across arms) ---")
+        print(build_prompt(item, display_smiles))
+        for arm in arms.ARMS.values():
+            pose_out = (
+                workdir / f"pose_{item['id']}.sdf"
+                if arm.uses_chemistree and case_type(item) == "decorate"
+                else None
             )
-            print(
-                f"[{row['status']}] {row['id']} ({arm.name}) {extra} "
-                f"footprint={row.get('context_footprint')} "
-                f"cost=${row.get('cost_usd')}"
-            )
+            sp = system_prompt(arm, item, bind_target, receptor, pose_out, guidance_on)
+            print(f"--- SYSTEM PROMPT [{arm.name}] ---")
+            print(sp)
 
 
 if __name__ == "__main__":

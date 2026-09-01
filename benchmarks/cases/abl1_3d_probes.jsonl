@@ -1,0 +1,2 @@
+{"id": "nearest-residue-cl", "ligand": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "question": "Which receptor residue (give its residue name and number, e.g. ASP381) has an atom closest to the ligand's chlorine atoms?", "answer": "ASP149"}
+{"id": "cl-contact-count", "ligand": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "question": "How many receptor residues have at least one atom within 4.0 Angstrom of a ligand chlorine atom?", "answer": "9"}
