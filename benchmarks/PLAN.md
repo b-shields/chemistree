@@ -446,19 +446,30 @@ Assembly (one source per bucket, no app change):
   placeholder). Extract them from the app file's wording so the tuning is preserved; accept
   the controlled duplication with the app file (a later DRY refactor could have the app
   assemble from the fragments, guarded by a diff-check — not now).
-- **MCP `chemistree` arm** — the server sets FastMCP `instructions = medchem.md + tools.md`
-  (filled), so `claude mcp add chemistree` is self-contained and any agent gets the guidance.
+- **MCP `chemistree` arm (benchmark)** — deliver `medchem.md + tools.md` via
+  **`--append-system-prompt`** (authoritative and reliable), matching how the app injects its
+  prompt. *Not* via MCP `instructions` — see the verification below.
 - **Baseline arms (N, G)** — `--append-system-prompt` with **`medchem.md` only** (the same
   tool-agnostic playbook), so the domain knowledge is matched and only the representation
-  differs.
+  differs. All arms get their guidance through the same mechanism; only the content differs.
 - **Shared edit budget** — put the cap ("make up to N edits") in `medchem.md`, so all arms get
   the same budget line (parity + cost control in one place).
+- **Product (`claude mcp add`)** — *also* set FastMCP `instructions = medchem.md + tools.md`
+  so the standalone server self-describes and any interactive agent gets the guidance as
+  context. Note it is softer than a system prompt (see below).
 
-**Verify first:** confirm Claude Code actually surfaces a FastMCP server's `instructions` to
-the model (one-shot probe: put a distinctive directive in `instructions` and check the agent
-follows it). If it does not, fall back to injecting `medchem.md + tools.md` via
-`--append-system-prompt` for the chemistree arm in the benchmark, and note the product-side
-gap (the standalone server could not self-describe) for separate follow-up.
+**Verified (2026-09-01): MCP `instructions` are surfaced but soft.** A probe — a FastMCP
+server with a distinctive directive in `instructions` plus a `ping` tool, driven by
+`claude -p` (haiku) — showed the model *can* see the instructions and attributes them to the
+server (it recited the marker when asked), **but does not obey them spontaneously** (a bare
+task and a neutral tool-using task both ignored the directive). So MCP `instructions` make
+guidance *present* for any `claude mcp add` agent but carry no system-prompt authority; they
+are not a reliable substitute for `--append-system-prompt`. Hence: the benchmark's chemistree
+arm gets the guidance via `--append-system-prompt` (reliable, fair), and the MCP `instructions`
+are a best-effort product nicety. **Fidelity caveat:** a real `claude mcp add` user therefore
+gets softer guidance than the benchmark's chemistree arm — worth stating, and a reason to keep
+the most load-bearing guidance short and to lean on the tool docstrings (which the model does
+follow).
 
 ## 7. Proposed repo layout
 
