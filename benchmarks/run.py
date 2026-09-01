@@ -153,24 +153,26 @@ def _prompt_3d(
     )
 
 
-def system_prompt(arm: arms.Arm, item: dict) -> str | None:
+def system_prompt(arm: arms.Arm, item: dict, guidance_on: bool = True) -> str | None:
     """The `--append-system-prompt` guidance for one arm, or None.
 
     Applied to 3D optimization only, where a medchem playbook is relevant. Every
     arm gets the same tool-agnostic playbook (`medchem`), so domain knowledge is
     matched; the chemistree arm additionally gets its tool-usage guidance. 2D
-    single-edit cases get no system prompt.
+    single-edit cases, and the no-guidance ablation, get no system prompt.
 
     Args:
         arm: The arm being run.
         item: The case.
+        guidance_on: When False (the ablation), no guidance is appended, isolating
+            the representation from the prompt.
 
     Returns:
         The system-prompt text, or None when no guidance applies.
     """
-    if not is_3d(item):
+    if not guidance_on or not is_3d(item):
         return None
-    return (
+    return str(
         guidance.chemistree_guidance()
         if arm.uses_chemistree
         else guidance.medchem_guidance()
@@ -223,6 +225,7 @@ def run_case(
     timeout: int,
     workdir: Path,
     trace: bool = False,
+    guidance_on: bool = True,
 ) -> dict:
     """Run one case and return its result row.
 
@@ -257,7 +260,8 @@ def run_case(
         if arm.uses_chemistree:
             pose_out = workdir / f"pose_{item['id']}.sdf"
     prompt = build_prompt(arm, item, seed_sdf, seed_smiles, pose_out)
-    command = build_command(arm, prompt, model, mcp_config, system_prompt(arm, item))
+    sys_prompt = system_prompt(arm, item, guidance_on)
+    command = build_command(arm, prompt, model, mcp_config, sys_prompt)
 
     row: dict = {"id": item["id"], "arm": arm.name, "model": model}
     start = time.time()
@@ -359,6 +363,12 @@ def main() -> None:
         help="Log the chemistree per-tool-call trace (extra disk writes; off by "
         "default).",
     )
+    parser.add_argument(
+        "--no-guidance",
+        action="store_true",
+        help="Ablation: skip the --append-system-prompt medchem guidance, to isolate "
+        "the representation from the prompt (3D only).",
+    )
     args = parser.parse_args()
 
     arm = arms.ARMS[args.arm]
@@ -380,7 +390,16 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as handle:
         for item in items:
-            row = run_case(arm, item, args.model, args.timeout, workdir, args.trace)
+            row = run_case(
+                arm,
+                item,
+                args.model,
+                args.timeout,
+                workdir,
+                args.trace,
+                guidance_on=not args.no_guidance,
+            )
+            row["guidance"] = not args.no_guidance
             handle.write(json.dumps(row) + "\n")
             handle.flush()
             extra = (

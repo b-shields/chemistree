@@ -104,6 +104,22 @@ It is the differentiator.
 - Track A real contest: **G(rdkit) vs C**. Track B real contest: **G(rdkit+smina) vs C**
   (arm N is near-floor in 3D since it has no way to score a pose).
 
+### Prompt ablation (Track B, haiku): guidance × arm
+
+Run each arm **with and without** the shared medchem guidance (`--no-guidance` toggle) — a
+2×3 factorial that separates *the prompt* from *the representation*, answering the fairness
+question head-on. The interesting quantity is the **interaction**: the medchem playbook says
+"position groups toward the pocket residues", which only an arm that can *read the pocket*
+can execute. So the hypothesis is that the prompt lifts **C** most, **G** somewhat, and **N**
+least (it cannot act on structure-aware advice at all). If **C-without-guidance already beats
+N/G-with-guidance**, that is strong evidence the representation — not the prompt — carries the
+result.
+
+Early abl1 signal (n=1, not yet the clean factorial): the prompt moved chemistree's recovery
+0.35 → 0.43 and made it avoid the phenol/aniline it had added unprompted, while naked's
+recovery stayed 0.377 with or without — the prompt only paid off where the tools let the agent
+act on it.
+
 ## 3. Architecture: how an agent gets chemistree (the `claude mcp add` question)
 
 **Recommendation: build a standalone in-process MCP server, driven by a runner CLI that
