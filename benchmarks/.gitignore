@@ -1,0 +1,5 @@
+# Large, re-fetchable datasets and prepared targets — commit the fetch scripts.
+data/
+# Raw run output — commit the tar.gz'd evidence, not the loose JSONL.
+results/*.jsonl
+!results/*.tar.gz
