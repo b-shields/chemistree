@@ -8,12 +8,12 @@ stable id, and every fragment keeps its own 3D pose in one shared frame. An agen
 by those ids — swap a ring, grow a substituent, mutate an atom, hop a scaffold — and the
 tree keeps the 2D graph and the 3D geometry consistent after each edit (structural edits
 go through a re-fragmentation step so the tree always matches building fresh from the
-edited molecule). With a receptor loaded, each edit is scored with the Vinardo function,
+edited molecule). With a receptor loaded, each edit is scored with a docking scoring function,
 so the agent can optimize binding while watching drug-likeness, internal strain, and
 steric clashes.
 
-The project ships a local web app that puts a 2D + 3D viewer next to a chat box, so you
-can watch an agent design against a pocket in real time.
+The project includes a local web app as a demonstration. The app puts a 2D + 3D viewer
+next to a chat box, so you can watch an agent design against a pocket in real time.
 
 ## Setup
 
@@ -30,13 +30,12 @@ Point the app at a ligand SDF, optionally with a receptor PDB for proximity cont
 
 ```bash
 conda activate chemistree
-chemistree tests/data/abl1/reference.sdf \
-    --receptor tests/data/abl1/receptor.pdb        # serves http://127.0.0.1:8000
+chemistree tests/data/abl1/reference.sdf --receptor tests/data/abl1/receptor.pdb        # serves http://127.0.0.1:8000
 ```
 
-Open the page to see the ligand in 2D (RDKit) and 3D (3Dmol.js) inside the receptor
-pocket. With a receptor loaded, the 3D view shows binding-site residues within 6 Å of the
-ligand as labeled lines over the ribbon.
+Open the page to see the ligand in 2D and 3D inside the receptor pocket. With a receptor
+loaded, the 3D view shows binding-site residues within 6 Å of the ligand as labeled lines
+over the ribbon.
 
 Flags:
 
@@ -53,7 +52,7 @@ The chat box drives **headless Claude Code**, and the app doubles as an MCP serv
 the agent edits the same session the viewers show. Run the app from the repo root (so
 Claude Code finds `.mcp.json`), then talk to it:
 
-> *"which chlorine is nearest ASP381?"* · *"swap that ring for a pyridine"* ·
+> *"remove the chlorine nearest to ASP381"* · *"swap the oxazole ring for a pyridine"* ·
 > *"grow a methyl ortho to the amine"* · *"optimize the binding affinity"* · *"undo that"*
 
 The MCP tools run against the live session, so every edit updates the 2D and 3D views in
