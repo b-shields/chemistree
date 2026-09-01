@@ -21,9 +21,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from rdkit import Chem
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem
 
 from benchmarks import arms, metrics, oracle_smina
+from benchmarks.tasks import strip_murcko
 
 
 def load_items(path: Path) -> list[dict]:
@@ -44,28 +46,48 @@ _CONTRACT = "End your reply with a line exactly of the form:\nFINAL_SMILES: <smi
 
 
 def is_3d(item: dict) -> bool:
-    """True for a 3D optimization case (carries a ligand file + receptor)."""
-    return "ligand" in item and "receptor" in item
+    """True for a 3D scaffold-recovery case (carries a crystal target + receptor)."""
+    return "target" in item and "receptor" in item
 
 
-def ligand_smiles(item: dict) -> str:
-    """The crystal ligand's canonical SMILES, for the arms that get text only."""
-    return str(Chem.MolToSmiles(Chem.MolFromMolFile(item["ligand"])))
+def target_smiles(item: dict) -> str:
+    """The crystal ligand's canonical SMILES (the recovery target)."""
+    return str(Chem.MolToSmiles(Chem.MolFromMolFile(item["target"])))
 
 
-def build_prompt(arm: arms.Arm, item: dict, pose_out: Path | None = None) -> str:
+def tanimoto(smiles: str | None, ref_smiles: str) -> float | None:
+    """ECFP4 Tanimoto similarity to a reference, or None if unparseable."""
+    query = Chem.MolFromSmiles(smiles) if smiles else None
+    ref = Chem.MolFromSmiles(ref_smiles)
+    if query is None or ref is None:
+        return None
+    fp = AllChem.GetMorganFingerprintAsBitVect
+    return float(
+        round(DataStructs.TanimotoSimilarity(fp(query, 2, 2048), fp(ref, 2, 2048)), 3)
+    )
+
+
+def build_prompt(
+    arm: arms.Arm,
+    item: dict,
+    seed_sdf: Path | None = None,
+    seed_smiles: str | None = None,
+    pose_out: Path | None = None,
+) -> str:
     """The task prompt for one case, tailored to the arm and the track.
 
     Args:
         arm: The arm being run.
         item: The case.
+        seed_sdf: The posed scaffold the agent starts from (3D only).
+        seed_smiles: The scaffold's SMILES, for the text-only arm (3D only).
         pose_out: Where the chemistree arm writes its final 3D pose (3D only).
 
     Returns:
         The prompt to pass to ``claude -p``.
     """
     if is_3d(item):
-        return _prompt_3d(arm, item, pose_out)
+        return _prompt_3d(arm, item, seed_sdf, seed_smiles, pose_out)
     return _prompt_2d(arm, item)
 
 
@@ -89,18 +111,26 @@ def _prompt_2d(arm: arms.Arm, item: dict) -> str:
     )
 
 
-def _prompt_3d(arm: arms.Arm, item: dict, pose_out: Path | None) -> str:
-    """The 3D optimization prompt, tailored to each arm's tools."""
+def _prompt_3d(
+    arm: arms.Arm,
+    item: dict,
+    seed_sdf: Path | None,
+    seed_smiles: str | None,
+    pose_out: Path | None,
+) -> str:
+    """The 3D scaffold-recovery prompt: elaborate a posed scaffold into a binder."""
     instruction = item["instruction"]
     if arm.uses_chemistree:
         return (
-            "Lower a ligand's predicted binding affinity with the chemistree tools.\n"
-            f'1. Call bind with molecule "{item["ligand"]}" and receptor '
+            "Elaborate a scaffold posed in a receptor into a potent binder with the "
+            "chemistree tools.\n"
+            f'1. Call bind with molecule "{seed_sdf}" and receptor '
             f'"{item["receptor"]}". The listing shows the Predicted affinity '
             "(Vinardo); lower (more negative) is better.\n"
-            f"2. {instruction} Use contacts and distance to read the pocket, clashes "
-            "to check strain, and minimize a group after an edit that moves atoms; "
-            "re-check the affinity.\n"
+            f"2. {instruction} Use contacts and distance to see which residues each "
+            "position faces, grow/swap substituents toward them, clashes to check "
+            "strain, and minimize a group after an edit that moves atoms; re-check "
+            "the affinity.\n"
             f'3. Call write_pose with path "{pose_out}" to save your final 3D pose.\n'
             "4. Call the smiles tool to read the final canonical SMILES.\n"
             f"{_CONTRACT}"
@@ -108,19 +138,19 @@ def _prompt_3d(arm: arms.Arm, item: dict, pose_out: Path | None) -> str:
     if arm.uses_chemistree is False and arm.allowed_tools == "Bash":  # generalist
         smina = os.environ.get("SMINA_BIN", "smina")
         return (
-            "Lower a ligand's predicted binding affinity to a receptor. You have "
+            "Elaborate a scaffold posed in a receptor into a potent binder. You have "
             "Bash with rdkit (python) and smina.\n"
-            f"Ligand SDF: {item['ligand']}\nReceptor: {item['receptor']}\n"
+            f"Scaffold SDF (posed): {seed_sdf}\nReceptor: {item['receptor']}\n"
             f"Score a candidate with:\n  {smina} --receptor {item['receptor']} "
-            f"--ligand <candidate.sdf> --autobox_ligand {item['ligand']} "
+            f"--ligand <candidate.sdf> --autobox_ligand {seed_sdf} "
             "--scoring vinardo --score_only\n"
             f"Task: {instruction}\n"
             f"{_CONTRACT}"
         )
     return (  # naked
-        "A ligand binds a protein target. Propose an analog with better predicted "
-        "binding affinity by editing its structure.\n"
-        f"SMILES: {ligand_smiles(item)}\n"
+        "A scaffold binds a protein target. Add substituents to elaborate it into a "
+        "potent, drug-like binder.\n"
+        f"Scaffold SMILES: {seed_smiles}\n"
         f"Task: {instruction}\n"
         f"{_CONTRACT}"
     )
@@ -181,10 +211,16 @@ def run_case(
         mcp_config.write_text(
             json.dumps(arms.chemistree_mcp_config(arm.tools_profile, str(trace_path)))
         )
+    seed_sdf = None
+    seed_smiles = None
     pose_out = None
-    if is_3d(item) and arm.uses_chemistree:
-        pose_out = workdir / f"pose_{item['id']}.sdf"
-    command = build_command(arm, build_prompt(arm, item, pose_out), model, mcp_config)
+    if is_3d(item):
+        seed_sdf = workdir / f"seed_{item['id']}.sdf"
+        seed_smiles = strip_murcko.write_scaffold(item["target"], str(seed_sdf))
+        if arm.uses_chemistree:
+            pose_out = workdir / f"pose_{item['id']}.sdf"
+    prompt = build_prompt(arm, item, seed_sdf, seed_smiles, pose_out)
+    command = build_command(arm, prompt, model, mcp_config)
 
     row: dict = {"id": item["id"], "arm": arm.name, "model": model}
     start = time.time()
@@ -208,7 +244,9 @@ def run_case(
     if trace_path is not None and trace_path.exists():
         row["trace"] = str(trace_path)
     if is_3d(item):
-        row.update(_score_3d(arm, item, final, pose_out, workdir))
+        row.update(
+            _score_3d(arm, item, final, seed_sdf, seed_smiles, pose_out, workdir)
+        )
     elif "gold" in item:  # provisional match; the real scorer is score_2d.py
         row["gold"] = item["gold"]
         row["correct"] = canonical(final) is not None and canonical(final) == canonical(
@@ -218,30 +256,45 @@ def run_case(
 
 
 def _score_3d(
-    arm: arms.Arm, item: dict, final: str | None, pose_out: Path | None, workdir: Path
+    arm: arms.Arm,
+    item: dict,
+    final: str | None,
+    seed_sdf: Path | None,
+    seed_smiles: str | None,
+    pose_out: Path | None,
+    workdir: Path,
 ) -> dict:
-    """Score a 3D case with smina: redock (Column 1) and, for arm C, the pose (2).
+    """Score a scaffold-recovery case: binding (redock) and recovery (Tanimoto).
 
     Args:
         arm: The arm being scored.
-        item: The 3D case (ligand, receptor).
+        item: The 3D case (crystal target, receptor).
         final: The arm's final SMILES, or None.
+        seed_sdf: The posed scaffold the agent started from.
+        seed_smiles: The scaffold's SMILES.
         pose_out: The chemistree arm's written pose SDF, or None.
         workdir: Directory for smina's scratch files.
 
     Returns:
-        Scoring fields to merge onto the result row (None where smina had nothing).
+        Redock Δ vs the scaffold baseline, and ECFP4 recovery toward the crystal
+        ligand (with the scaffold's floor).
     """
-    receptor, ligand = item["receptor"], item["ligand"]
-    baseline = oracle_smina.redock(ligand_smiles(item), receptor, ligand, workdir)
-    final_aff = oracle_smina.redock(final, receptor, ligand, workdir) if final else None
-    out: dict = {"redock_baseline": baseline, "redock_final": final_aff}
+    receptor, box = item["receptor"], item["target"]
+    target_smi = target_smiles(item)
+    baseline = (
+        oracle_smina.redock(seed_smiles, receptor, box, workdir)
+        if seed_smiles
+        else None
+    )
+    final_aff = oracle_smina.redock(final, receptor, box, workdir) if final else None
+    out: dict = {"redock_scaffold": baseline, "redock_final": final_aff}
     if baseline is not None and final_aff is not None:
-        out["redock_delta"] = round(final_aff - baseline, 2)
-        out["improved"] = final_aff < baseline
+        out["redock_delta"] = round(final_aff - baseline, 2)  # negative = better
+    out["recovery_scaffold"] = tanimoto(seed_smiles, target_smi)  # floor (~0.33)
+    out["recovery_final"] = tanimoto(final, target_smi)
     if arm.uses_chemistree and pose_out is not None and pose_out.exists():
         out["pose_final"] = oracle_smina.score_pose(str(pose_out), receptor)
-        out["pose_baseline"] = oracle_smina.score_pose(ligand, receptor)
+        out["pose_scaffold"] = oracle_smina.score_pose(str(seed_sdf), receptor)
     return out
 
 
@@ -288,8 +341,9 @@ def main() -> None:
             handle.write(json.dumps(row) + "\n")
             handle.flush()
             extra = (
-                f"Δaffinity={row.get('redock_delta')}"
-                if "redock_delta" in row
+                f"Δaffinity={row.get('redock_delta')} "
+                f"recovery={row.get('recovery_scaffold')}->{row.get('recovery_final')}"
+                if is_3d(item)
                 else f"correct={row.get('correct')}"
             )
             print(

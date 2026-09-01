@@ -1,1 +1,1 @@
-{"id": "abl1", "ligand": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Make a few edits to lower the predicted Vinardo binding affinity (more negative is better) while keeping the molecule drug-like."}
+{"id": "abl1", "target": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Add substituents to the scaffold to build a potent, drug-like binder for this pocket (lower the predicted Vinardo affinity)."}
