@@ -66,20 +66,31 @@ receptor, no pose/`minimize`).
 > (all three arms, haiku) is in `README.md`: all 3/3 correct, so trivial edits do not
 > separate the arms — the three categories above, at real difficulty, are what should.
 
-### Track B — 3D structure-based optimization (our own benchmark: DUD-Z)
+### Track B — 3D scaffold recovery (our own benchmark: DUD-Z)
 
-This is the track chemistree is uniquely built for and no public agentic benchmark
-covers. It is the differentiator.
+This is the track chemistree is uniquely built for and no public agentic benchmark covers.
+It is the differentiator.
 
-- Targets: **DUD-Z** (Shoichet lab). Chosen because the receptors come prepared and each
-  target ships a crystal/reference ligand pose we can seed from.
-- **B1 — optimization**: seed the session with a known active (or the reference
-  ligand) posed in the pocket; ask the agent to *improve predicted binding while keeping
-  the molecule drug-like and physically valid*. The agent edits; we score the result
-  with the same scoring function but as implemented via `smina`.
-- **B2 — 3D understanding probes**: deterministic Q&A with ground truth read straight from
-  the prepared complex (e.g. "which residue is closest to the chlorine?", "list the groups
-  that clash").
+- Targets: **DUD-Z** (Shoichet lab). Each ships a receptor + a drug-like crystal ligand
+  posed in the pocket.
+- **B1 — scaffold recovery / elaboration** (primary): strip each crystal ligand to its
+  **Murcko scaffold** (systematically, via `rdkit.Chem.Scaffolds.MurckoScaffold`), keeping
+  the scaffold atoms' **crystal coordinates** so it stays posed in the pocket. Seed the
+  agent with that posed, stripped scaffold and ask it to *re-elaborate it into a good
+  binder*. Score two ways (§4): the **redock Δ** vs the scaffold baseline (did it bind
+  better) **and** the **similarity/recovery to the crystal ligand** (did it rebuild the
+  *right* groups). The crystal ligand is the ground-truth answer.
+
+  Why this and not "improve from the full crystal": that framing starts near-optimal, so
+  the only lever is **adding mass**, which redock rewards — the abl1 loop-validation showed
+  naked "winning" by bloating with no pocket info (`README.md`, 3D test). Stripping to a
+  scaffold restores real room to improve *in a direction*, gives a ground-truth target, and
+  the recovery metric is gaming-resistant: random mass improves affinity but will not match
+  the crystal's *specific* substituents — you score well only by placing groups where the
+  pocket wants them, which is exactly chemistree's pitch.
+- **B2 — 3D understanding probes** (optional): deterministic Q&A with ground truth read
+  straight from the prepared complex ("which residue is closest to the chlorine?", "list the
+  groups that clash").
 
 ## 2. Arms (hold the model fixed; vary only tooling)
 
@@ -264,26 +275,29 @@ keeps isolation trivial and parallelizes; revisit only if spawn cost bites.)
   arms should separate.
 - **Efficiency**: see the shared efficiency subsection below.
 
-### Track B1 (3D optimization)
-Score each final molecule two ways and **report both columns separately** (do not collapse
-them) — the trend between them is itself a result:
-- **Column 1 — smina redock** (fair, arm-agnostic): dock the final SMILES into the
-  reference-ligand box with **smina** (default search, `--scoring vinardo`, fixed seed +
-  exhaustiveness); take the best pose. Δaffinity vs the redocked-crystal baseline (§5).
-  This is the cross-arm number: every arm is scored identically from its SMILES.
-- **Column 2 — chemistree pose** (arm C only): `smina --score_only --scoring vinardo` on
-  the SDF the agent exports via the new **`write_pose`** tool. Δaffinity vs the score-only
-  crystal-pose baseline. This scores the pose chemistree actually maintained/minimized.
-- **Reading the trend**: where Column 2 beats Column 1, smina's stochastic search **missed
-  a minimum chemistree already occupies** (the redock failed, not the molecule); where they
-  agree, the redock is reliable. Column 2 is N/A for arms with no maintained pose (N; G
-  unless it docked) — expected, and itself informative about what keeping a 3D pose buys.
-- **Success**: fraction of items with Δaffinity beyond a threshold, at a fixed edit
-  budget (`success@budget`), plus best-of. Reported per column.
-- **Validity gate**: smina must dock the molecule into the box (a molecule that cannot be
-  posed in-site gets no credit), and it must stay within a **property window** (QED / MW /
-  cLogP guardrails) so an arm cannot "win" by bolting on greasy mass. Failing the gate =
-  no credit.
+### Track B1 (3D scaffold recovery)
+Two metric families — **binding** (did it improve) and **recovery** (did it rebuild the
+right structure). Recovery is the gaming-resistant one; report both, never binding alone.
+
+**Binding — smina redock**, two columns reported separately:
+- **Column 1 — redock** (fair, arm-agnostic): dock the final SMILES into the box (from the
+  crystal ligand) with **smina** (default search, `--scoring vinardo`, fixed seed +
+  exhaustiveness); best pose. Δaffinity vs the redocked **scaffold** baseline (§5) — the
+  seed is the stripped scaffold, so a good elaboration is a large negative Δ.
+- **Column 2 — chemistree pose** (arm C only): `smina --score_only --scoring vinardo` on the
+  `write_pose` SDF. Where it beats Column 1, smina's search missed a minimum chemistree
+  already occupies (the redock failed, not the molecule); N/A for arms with no pose.
+
+**Recovery — similarity to the crystal ligand** (the ground-truth answer):
+- **Tanimoto** (Morgan/ECFP4) between the final molecule and the crystal ligand — the
+  headline recovery number. An arm that bloats improves binding but not Tanimoto; only
+  placing the crystal's *actual* groups scores high, which needs pocket awareness.
+- **R-group recovery** (secondary): fraction of the stripped substituents the arm rebuilt
+  (by substructure), for a more interpretable breakdown.
+
+- **Validity gate**: smina must dock the molecule in-site (else no credit), and it must stay
+  within a **property window** (QED / MW / cLogP) so binding cannot be gamed by greasy mass
+  — recovery already resists this, but the gate keeps the binding column honest too.
 - **Efficiency**: see the shared efficiency subsection below.
 
 ### Track B2 (understanding probes)
@@ -365,15 +379,17 @@ uniformly, kept only when a transform matches exactly one site (uniqueness filte
 the product; **core hopping** as a hand-curated set (scaffold → bioisostere, substituents
 kept), gold verified. Pre-register the resulting case list.
 
-### Track B baseline
+### Track B seed + baseline
 
-Per target, **redock the crystal ligand** with the same smina settings the oracle uses
-(default search, `--scoring vinardo`, **fixed seed + exhaustiveness**). Double duty: the
-redocking sanity check (keep the target only if smina recovers the crystal pose,
-RMSD < ~2 Å), and the **Column 1 baseline** every arm's redocked final is compared against.
-Also record `--score_only` on the crystal pose as the **Column 2 baseline**. Each column's
-baseline and finals are measured identically. The agent starts from the crystal ligand
-(bound as its posed SDF, see §3).
+Per target: strip the crystal ligand to its **Murcko scaffold**, keeping the scaffold atoms'
+crystal coordinates (make an RWMol copy of the posed ligand, delete the non-scaffold atoms →
+a posed scaffold SDF). This posed scaffold is what the agent binds/starts from (§3); the
+**crystal ligand is the recovery target** (§4). Sanity-check the target first by redocking
+the crystal ligand (keep it only if smina recovers the crystal pose, RMSD < ~2 Å) — same
+smina settings the oracle uses (default search, `--scoring vinardo`, **fixed seed +
+exhaustiveness**). The **Column 1 baseline** is the redocked *scaffold*; the **Column 2
+baseline** is `--score_only` on the scaffold pose. Each column's baseline and finals are
+measured identically.
 
 ### Optional follow-on — ChemCoTBench (not built now)
 
@@ -448,16 +464,19 @@ src/chemistree/mcp/
    the verified 2D edit path (swap/grow/mutate/remove/undo on a receptor-free session) —
    currently untested. Keep `app/mcp.py` behavior identical apart from the added tool (the
    live demo must not regress). Run the suite. Update the main project README.md.
-2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) — **done**: arm C, N, and G
-   run end to end (spawn / output-contract parse / usage-capture / provisional score); a
-   3-case 2D sanity run for all three arms is in `README.md`.
+2. **Runner CLI** (`benchmarks/run.py` + `benchmarks/arms.py`) — **done** for 2D and 3D:
+   all three arms run end to end. `oracle_smina.py` (redock + score_only) is **done** and
+   validated on abl1. A 2D sanity run and a 3D loop-validation (which drove the Track B
+   redesign) are in `README.md`.
 3. **Structures**: `fetch_dudz.py` — pull only the per-target receptor + crystal ligand
    (DUD-Z prepped files, or RCSB PDB by id), bare prep (§5). Shortlist drug-like targets.
 4. **Track A**: `tasks/gen_2d.py` — generate substitution / growing / core-hop cases with
    computed gold from the ligand SMILES; `score_2d.py` (canonical match, per category).
    Run arms N, G, C; report per-category accuracy + efficiency.
-5. **Track B**: `oracle_smina.py` + `score_3d.py` (redock two columns, validity gate) and
-   `tasks/track_b.py`; arm C, then G and N.
+5. **Track B (scaffold recovery)**: `tasks/strip_murcko.py` (crystal → posed Murcko
+   scaffold + keep the crystal as target); `score_3d.py` (redock Δ vs scaffold baseline +
+   Tanimoto/R-group recovery to the crystal + validity gate); wire into `run.py`'s 3D path
+   (seed the scaffold, add recovery to the row). Run arms C, then G and N.
 6. **Track B2** understanding probes (optional, cheap).
 7. **Sonnet** (optional; confirm before acting) secondary run for the "cheap model catches
    up" result.
