@@ -402,6 +402,46 @@ def test_contacts_requires_a_receptor():
         session.contacts()
 
 
+def test_residues_near_matches_ground_truth_for_the_chlorines():
+    # residues_near reports every residue within the cutoff of a group -- unlike
+    # contacts, which keeps only the closest atom per residue. So the union over
+    # the two chloro groups is exactly the residues near either chlorine.
+    from chemistree.receptor import min_distance
+
+    session = _abl1_session()
+    receptor = session.receptor
+    chloro = [
+        node
+        for node in session.tree.nodes
+        if any(a.GetSymbol() == "Cl" for a in node.current.mol.GetAtoms())
+    ]
+    cl_coords = np.array(
+        [
+            list(node.current.mol.GetConformer().GetAtomPosition(a.GetIdx()))
+            for node in chloro
+            for a in node.current.mol.GetAtoms()
+            if a.GetSymbol() == "Cl"
+        ]
+    )
+    truth = {
+        f"{r.name}{r.number}"
+        for r in receptor.residues()
+        if min_distance(cl_coords, receptor.residue_positions(r)) <= 4.0
+    }
+    found: set[str] = set()
+    for node in chloro:
+        report = session.residues_near(node.id, cutoff=4.0)
+        found |= set(re.findall(r"[A-Z]{3}\d+", report))
+    assert found == truth
+    assert "ASP149" in found  # the closest Cl contact, a sanity anchor
+
+
+def test_residues_near_requires_a_receptor():
+    session = DesignSession("Cc1ccccc1", three_d=True)
+    with pytest.raises(ValueError, match="receptor"):
+        session.residues_near(0)
+
+
 def test_edits_are_undoable():
     session = DesignSession("Cc1ccccc1", three_d=False)
     start = session.smiles()

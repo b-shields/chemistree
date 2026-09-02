@@ -9,8 +9,11 @@ or a SMILES with one dummy `[*]` per attachment point.
 # Reading the pocket and the score
 
 When a request names a residue, call distance to see which group is closest, or contacts to
-map the whole binding site, before editing. On the structure-based pass, call contacts (or
-distance) to read the residues around each open position and choose edits that suit them.
+map the whole binding site, before editing. To read the pocket around one of your own groups
+— which residues a substituent sits against — call residues_near on that group (or a single
+atom of it); it names every residue within reach, not just the closest contact. On the
+structure-based pass, use contacts, distance, or residues_near to read the residues around
+each open position and choose edits that suit them.
 
 When a receptor is loaded, the group listing ends with a predicted affinity (Vinardo score;
 more negative is better) and, separately, the ligand's internal energy, both refreshed after

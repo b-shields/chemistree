@@ -180,6 +180,29 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         return backend.run(f"contacts {dist_cutoff}")
 
     @mcp.tool
+    def residues_near(
+        group_id: int, position_id: int | None = None, cutoff: float = 4.5
+    ) -> str:
+        """List the receptor residues a group (or one of its atoms) contacts.
+
+        The group-to-residues view: given a part of your own molecule, see what it
+        touches in the pocket. It complements ``distance`` (a named residue → each
+        group) and ``contacts`` (the whole pocket → closest group per residue).
+        Unlike ``contacts``, it names *every* residue near the target, not just the
+        closest atom's — so a query like "which residues does this chlorine reach?"
+        is answered in full. Omit ``position_id`` to measure from the whole group,
+        or pass a heavy-atom id (from ``describe_group``) to measure from one atom.
+
+        Args:
+            group_id: Group to measure from (from ``describe``).
+            position_id: Optional heavy-atom id in the group (from
+                ``describe_group``); omit for the whole group.
+            cutoff: Contact radius in angstrom.
+        """
+        position = "-" if position_id is None else position_id
+        return backend.run(f"residues_near {group_id} {position} {cutoff}")
+
+    @mcp.tool
     def minimize(group_id: int, degrees: float = 0.0, window: float = 180.0) -> str:
         """Settle a group about its attachment bond into its best-scoring rotamer.
 

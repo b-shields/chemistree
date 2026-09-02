@@ -26,6 +26,7 @@ def run_command(session: DesignSession, text: str) -> str:
         group <id>
         distance <residue>
         contacts [dist_cutoff]
+        residues_near <id> <position_id|-> <cutoff>
         clashes
         write_pose <path>
 
@@ -78,6 +79,9 @@ def run_command(session: DesignSession, text: str) -> str:
         return session.distance(args[0])
     if command == "contacts":
         return session.contacts(float(args[0])) if args else session.contacts()
+    if command == "residues_near":
+        pos = None if args[1] == "-" else int(args[1])
+        return session.residues_near(int(args[0]), pos, float(args[2]))
     if command == "clashes":
         return session.clashes()
     if command == "write_pose":

@@ -28,7 +28,7 @@ from chemistree.fragmenter import fragment
 from chemistree.geometry import align_transform
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
-from chemistree.receptor import Receptor, Residue
+from chemistree.receptor import Receptor, Residue, min_distance
 from chemistree.scoring import (
     ScoreComponents,
     atom_typing,
@@ -391,6 +391,48 @@ class DesignSession:
                     )
         assert best is not None  # a pocket residue has at least one nearby atom
         return best
+
+    def residues_near(
+        self, group_id: int, position_id: int | None = None, cutoff: float = 4.5
+    ) -> str:
+        """List the receptor residues a group (or one of its atoms) contacts.
+
+        Reports every residue with an atom within ``cutoff`` of the group's heavy
+        atoms — or, when ``position_id`` is given, of that one atom — closest
+        first. This is the group-to-residues view: what a substituent touches in
+        the pocket. Unlike ``contacts``, which keeps only the closest atom per
+        residue, it names every residue near the atom, so an atom-specific query
+        ("which residues does this chlorine reach?") is answered in full.
+
+        Args:
+            group_id: Id of the group to measure from (from ``describe``).
+            position_id: Optional heavy-atom id in the group (from
+                ``describe_group``); omit to measure from the whole group.
+            cutoff: Contact radius in angstrom.
+
+        Returns:
+            Markdown: a table of residue and its minimum distance to the target,
+            sorted closest first.
+
+        Raises:
+            ValueError: If no receptor is loaded, the ligand lacks 3D coordinates,
+                or ``position_id`` is not a heavy atom of the group.
+        """
+        if self.receptor is None:
+            raise ValueError("spatial contacts need a receptor")
+        mol = self.tree.node(group_id).current.mol
+        if not mol.GetNumConformers():
+            raise ValueError("spatial contacts need a ligand with 3D coordinates")
+        target = _target_positions(mol, position_id)
+        hits = [
+            (residue, min_distance(target, self.receptor.residue_positions(residue)))
+            for residue in self.receptor.residues()
+        ]
+        hits = [(residue, dist) for residue, dist in hits if dist <= cutoff]
+        hits.sort(key=lambda hit: hit[1])
+        return _residues_near_report(
+            group_id, self._label(group_id), position_id, cutoff, hits
+        )
 
     def minimize(
         self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
@@ -903,6 +945,52 @@ def _contacts_report(dist_cutoff: float, contacts: list[_Contact]) -> str:
             f"| {contact.residue} | [{contact.node_id}] {contact.label} "
             f"| atom {contact.atom_id} ({contact.symbol}) | {contact.distance:.2f} |"
         )
+    return "\n".join(lines)
+
+
+def _target_positions(mol: Chem.Mol, position_id: int | None) -> np.ndarray:
+    """Coordinates to measure from: one heavy atom, or all of a group's heavy atoms.
+
+    Args:
+        mol: The group's fragment molecule, posed in 3D.
+        position_id: A heavy-atom id to measure from, or None for the whole group.
+
+    Returns:
+        An (N, 3) array of the target coordinates.
+
+    Raises:
+        ValueError: If ``position_id`` is out of range or not a heavy atom.
+    """
+    conf = mol.GetConformer()
+    if position_id is None:
+        idxs = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+    else:
+        if not 0 <= position_id < mol.GetNumAtoms():
+            raise ValueError(f"no atom {position_id} in this group")
+        if mol.GetAtomWithIdx(position_id).GetAtomicNum() <= 1:
+            raise ValueError(f"atom {position_id} is not a heavy atom")
+        idxs = [position_id]
+    return np.array([list(conf.GetAtomPosition(i)) for i in idxs])
+
+
+def _residues_near_report(
+    group_id: int,
+    label: str,
+    position_id: int | None,
+    cutoff: float,
+    hits: list[tuple[Residue, float]],
+) -> str:
+    """Render the residues-near table, hits already sorted closest first."""
+    target = f"[{group_id}] {label}"
+    if position_id is not None:
+        target += f" atom {position_id}"
+    lines = [f"# Residues within {cutoff:g} A of {target}", ""]
+    if not hits:
+        lines.append(f"No residue within {cutoff:g} A.")
+        return "\n".join(lines)
+    lines += ["| residue | distance (A) |", "|---|---|"]
+    for residue, distance in hits:
+        lines.append(f"| {residue.name}{residue.number} | {distance:.2f} |")
     return "\n".join(lines)
 
 

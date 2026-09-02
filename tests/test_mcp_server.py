@@ -64,16 +64,28 @@ def test_trace_logs_one_record_per_tool_call(tmp_path):
 def test_profile_all_registers_the_full_set():
     mcp = _RecordingMCP()
     tools.register(mcp, SessionBackend(prime=False), profile="all")
-    assert {"swap", "minimize", "clashes", "write_pose", "contacts"} <= set(mcp.names)
+    assert {
+        "swap",
+        "minimize",
+        "clashes",
+        "write_pose",
+        "contacts",
+        "residues_near",
+    } <= set(mcp.names)
 
 
 def test_profile_2d_omits_the_pose_and_pocket_tools():
     mcp = _RecordingMCP()
     tools.register(mcp, SessionBackend(prime=False), profile="2d")
     assert "swap" in mcp.names and "describe_group" in mcp.names
-    assert not {"minimize", "clashes", "write_pose", "distance", "contacts"} & set(
-        mcp.names
-    )
+    assert not {
+        "minimize",
+        "clashes",
+        "write_pose",
+        "distance",
+        "contacts",
+        "residues_near",
+    } & set(mcp.names)
 
 
 def test_build_server_registers_bind():
