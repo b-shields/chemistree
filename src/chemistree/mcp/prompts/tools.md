@@ -6,6 +6,13 @@ before grow or mutate to get a group's atom position ids: grow at a listed hydro
 mutate a heavy-atom id. Group arguments take a common name (`isopropyl`, `trifluoromethyl`)
 or a SMILES with one dummy `[*]` per attachment point.
 
+Work deliberately: think the edit through, then make one considered move and read its result.
+A ring swap reports each port's IUPAC locant (e.g. `[3*] at C2`) — check every port against
+what the request asked, and if any sits at the wrong locant, undo and swap again with the port
+labels rearranged. Do not accept a partly-wrong ring, and do not strip substituents you meant
+to keep. If a swap or grow returns an error, the group SMILES was wrong — fix that SMILES and
+retry the same edit. A few deliberate moves beat a flurry of trial-and-error.
+
 # Reading the pocket and the score
 
 When a request names a residue, call distance to see which group is closest, or contacts to

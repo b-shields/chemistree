@@ -189,7 +189,9 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         residue. It returns one row per residue within ``dist_cutoff`` of any
         ligand heavy atom, naming the closest group and the atom in it — so a
         request like "grow toward the aspartate" maps straight to a group and atom
-        to edit.
+        to edit. It shows only the single closest atom per residue, so to count or
+        list the residues near a specific atom or group (e.g. a chlorine), use
+        ``residues_near`` instead — ``contacts`` will undercount.
 
         Args:
             dist_cutoff: Site radius in angstrom (a residue counts when any atom is
@@ -203,13 +205,13 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
     ) -> str:
         """List the receptor residues a group (or one of its atoms) contacts.
 
-        The group-to-residues view: given a part of your own molecule, see what it
-        touches in the pocket. It complements ``distance`` (a named residue → each
-        group) and ``contacts`` (the whole pocket → closest group per residue).
+        The group-to-residues view: given a part of your own molecule, count or list
+        which residues are near it. It complements ``distance`` (a named residue →
+        each group) and ``contacts`` (the whole pocket → closest group per residue).
         Unlike ``contacts``, it names *every* residue near the target, not just the
-        closest atom's — so a query like "which residues does this chlorine reach?"
-        is answered in full. Omit ``position_id`` to measure from the whole group,
-        or pass a heavy-atom id (from ``describe_group``) to measure from one atom.
+        closest atom's — so this is the tool for a "how many / which residues are
+        within X of this chlorine?" question. Omit ``position_id`` to measure from
+        the whole group, or pass a heavy-atom id (from ``describe_group``) for one atom.
 
         Args:
             group_id: Group to measure from (from ``describe``).
