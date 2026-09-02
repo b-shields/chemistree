@@ -475,6 +475,30 @@ def test_matches_rejects_an_unparseable_pattern():
         session.matches("$$$ not a pattern")
 
 
+def test_swap_result_reports_ring_positions_of_the_new_ports():
+    from chemistree.commands import run_command
+
+    session = DesignSession(
+        "Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)ccc1F", three_d=False
+    )
+    run_command(session, "remove 7")  # drop the N-methyl on the core
+    # swap the core for a quinazoline with the dichlorophenyl port ([4*]) landing on C2
+    message = run_command(session, "swap 0 [4*]c1ncc2cc([3*])ccc2n1")
+    assert "quinazoline" in message
+    assert "[4*] at C2" in message  # the misplacement is visible in the result
+
+
+def test_non_ring_swap_reports_no_position_note():
+    from chemistree.commands import run_command
+
+    session = DesignSession("Cc1ccccc1", three_d=False)  # toluene
+    methyl = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings() == 0
+    )
+    message = run_command(session, f"swap {methyl} [1*]C(F)(F)F")
+    assert "position" not in message
+
+
 def test_edits_are_undoable():
     session = DesignSession("Cc1ccccc1", three_d=False)
     start = session.smiles()

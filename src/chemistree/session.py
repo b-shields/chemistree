@@ -26,7 +26,13 @@ from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.geometry import align_transform
-from chemistree.heterocycles import heterocycle_name, heterocycle_smiles
+from chemistree.heterocycles import (
+    HETEROCYCLES,
+    heterocycle_name,
+    heterocycle_smiles,
+    number_ring_system,
+    ring_ports_summary,
+)
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
 from chemistree.receptor import Receptor, Residue, min_distance
@@ -477,6 +483,33 @@ class DesignSession:
             if node.id is not None and node.current.mol.HasSubstructMatch(query)
         ]
         return _matches_report(pattern, name, whole, group_hits)
+
+    def ring_change_note(self, before: Chem.Mol, after: Chem.Mol) -> str:
+        """A note on a ring edit: the vendored ring and its ports' canonical positions.
+
+        Used by the command layer to append position feedback to swap/grow/mutate
+        results when the edit adds, removes, or changes a numbered ring — so the agent
+        sees where each port landed (``[4*] at position 2``) without cross-referencing.
+
+        Args:
+            before: The edited group's fragment before the edit.
+            after: The edited group's fragment after the edit.
+
+        Returns:
+            A leading-``; `` note, or ``""`` when no vendored ring was involved.
+        """
+        was, now = number_ring_system(before), number_ring_system(after)
+        if now is None:
+            if was is not None and _exact_ring(before, was):
+                return f"; the {was[0]} ring was removed"
+            return ""
+        # Only name the previous ring when it was itself an exact vendored ring (not a
+        # sub-ring of a larger fused system), and it differs from the new one.
+        if was is not None and _exact_ring(before, was) and was[0] != now[0]:
+            return (
+                f"; {ring_ports_summary(before)} changed to {ring_ports_summary(after)}"
+            )
+        return f"; {ring_ports_summary(after)}"
 
     def minimize(
         self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
@@ -1036,6 +1069,16 @@ def _residues_near_report(
     for residue, distance in hits:
         lines.append(f"| {residue.name}{residue.number} | {distance:.2f} |")
     return "\n".join(lines)
+
+
+def _exact_ring(mol: Chem.Mol, numbered: tuple[str, dict[int, int]] | None) -> bool:
+    """True if a vendored ring matched all of ``mol``'s ring system, not a sub-ring."""
+    if numbered is None:
+        return False
+    ring_atoms = sum(1 for a in mol.GetAtoms() if a.IsInRing())
+    return bool(
+        ring_atoms == Chem.MolFromSmiles(HETEROCYCLES[numbered[0]]).GetNumAtoms()
+    )
 
 
 def _matches_report(
