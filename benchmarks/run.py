@@ -5,8 +5,9 @@ chemistree arm), so cases never share context and tokens are attributed per case
 
 Fairness: the **task prompt** (the ``-p`` text) is word-for-word **identical** across
 arms; only the **system prompt** (``--append-system-prompt``) differs, carrying each
-arm's access mechanics and — on decorate — the toggled medchem guidance. Both prompts
-are recorded on each row so parity is auditable. Each case runs in an isolated directory
+arm's access mechanics plus the medchem guidance (applied on every track, matching what
+the app injects; ``--no-guidance`` drops it). Both prompts are recorded on each row so
+parity is auditable. Each case runs in an isolated directory
 (the agent's cwd) holding only the staged inputs, so a shell-capable arm cannot read the
 crystal ligand (the answer) or the case files (the answer key).
 
@@ -205,7 +206,7 @@ def mechanics(
 
 
 def guidance_text(arm: arms.Arm) -> str:
-    """The medchem playbook plus each arm's tool-usage translation (decorate only)."""
+    """The medchem playbook plus each arm's tool-usage translation."""
     if arm.uses_chemistree:
         return str(guidance.chemistree_guidance())
     if arm.allowed_tools == "Bash":  # generalist
@@ -221,7 +222,11 @@ def system_prompt(
     pose_out: str | None,
     guidance_on: bool,
 ) -> str | None:
-    """The `--append-system-prompt` text: mechanics + (guidance on decorate), or None.
+    """The `--append-system-prompt` text: mechanics + guidance, or None.
+
+    Guidance (the medchem playbook plus the arm's tool-usage translation) is applied
+    on every track, matching what the app injects; ``--no-guidance`` drops it (the
+    base-prompt ablation).
 
     Args:
         arm: The arm being run.
@@ -238,7 +243,7 @@ def system_prompt(
     mech = mechanics(arm, item, bind_target, receptor, pose_out)
     if mech:
         parts.append(mech)
-    if guidance_on and case_type(item) == "decorate":
+    if guidance_on:
         parts.append(guidance_text(arm))
     return "\n\n".join(parts) if parts else None
 

@@ -25,6 +25,17 @@ user says otherwise, add an amine in its cationic (protonated) form unless it is
 an aromatic atom, a carbonyl, or a fluorinated carbon. If a group has more than one nitrogen,
 protonate only the most basic one (e.g. `c1ccccc1N2CC[NH2+]CC2`).
 
+# Getting named heterocycles right
+
+When a request names a specific heterocycle — oxazole, isoxazole, thiazole, imidazole,
+pyrimidine, quinazoline, and the like — build that exact ring, not a look-alike. The ring
+atoms and their order set the identity: an oxazole is 1,3 (the O and N separated by one
+carbon), an isoxazole is 1,2 (the O and N adjacent); a 2-oxazole attaches through the carbon
+between the O and the N. Place each named substituent on the atom the request states,
+counting positions by canonical ring numbering. When you are done, read the final structure
+back and confirm the ring you built is the one named, with every substituent on the right
+atom — if it does not match, fix it before you finish.
+
 # How to optimize
 
 Work autonomously: make a run of edits without pausing, and report at the end what you tried
