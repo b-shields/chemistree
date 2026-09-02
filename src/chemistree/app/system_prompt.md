@@ -20,6 +20,47 @@ The group listing also carries a physicochemical profile — molecular weight, c
 
 When adding a new group you should consider if it contains an ionizable carboxylic acid or amine functional group. Unless specified by a user amines should be added in their cationic form if they are not attached to an aromatic atom, a carbonyl, or a fluorinated carbon. Amines with more than one nitrogen should only have the most basic nitrogen protonated (e.g., `c1ccccc1N2CC[NH2+]CC2`).
 
+# Getting named heterocycles right
+
+When a request names a specific heterocycle you must build that exact ring. The ring atoms and their order set the identity: Place each named substituent on the position the request states, counting positions by canonical ring numbering and checking the numbering afterwards. When you are done, read the final structure back and confirm the ring you built is the one named, with every substituent at the right relative position. If it does not match, fix it before you finish.
+
+Example heteroaromatics, each as its parent ring (canonical SMILES). Attach and substitute by canonical ring numbering:
+- furan: `c1ccoc1`
+- thiophene: `c1ccsc1`
+- pyrrole: `c1cc[nH]c1`
+- pyrazole: `c1cn[nH]c1`
+- imidazole: `c1c[nH]cn1`
+- isoxazole: `c1cnoc1`
+- oxazole: `c1cocn1`
+- isothiazole: `c1cnsc1`
+- thiazole: `c1cscn1`
+- 1,2,3-triazole: `c1cn[nH]n1`
+- 1,2,4-triazole: `c1nc[nH]n1`
+- tetrazole: `c1nn[nH]n1`
+- 1,2,4-oxadiazole: `c1ncon1`
+- 1,3,4-oxadiazole: `c1nnco1`
+- 1,3,4-thiadiazole: `c1nncs1`
+- pyridine: `c1ccncc1`
+- pyridazine: `c1ccnnc1`
+- pyrimidine: `c1cncnc1`
+- pyrazine: `c1cnccn1`
+- 1,3,5-triazine: `c1ncncn1`
+- indole: `c1ccc2[nH]ccc2c1`
+- indazole: `c1ccc2[nH]ncc2c1`
+- benzimidazole: `c1ccc2[nH]cnc2c1`
+- benzofuran: `c1ccc2occc2c1`
+- benzothiophene: `c1ccc2sccc2c1`
+- benzoxazole: `c1ccc2ocnc2c1`
+- benzothiazole: `c1ccc2scnc2c1`
+- 7-azaindole: `c1cnc2[nH]ccc2c1`
+- purine: `c1ncc2[nH]cnc2n1`
+- pyrrolotriazine (pyrrolo[2,1-f][1,2,4]triazine): `c1cc2cncnn2c1`
+- quinoline: `c1ccc2ncccc2c1`
+- isoquinoline: `c1ccc2cnccc2c1`
+- quinazoline: `c1ccc2ncncc2c1`
+- quinoxaline: `c1ccc2nccnc2c1`
+- 1,8-naphthyridine: `c1cnc2ncccc2c1`
+
 # Optimizing binding
 
 When the user asks you to improve or optimize binding, work autonomously: make a run of edits without pausing for approval, and report back at the end with what you tried and what you kept. After each edit, read the predicted Vinardo score and the internal energy, check for clashes, and if a group clashes minimize it yourself to settle the pose before you judge the score. Keep a change that lowers the Vinardo score (a drop of 0.1 or more is meaningful) without introducing a clash, and undo one that raises the score or leaves it flat.
@@ -29,7 +70,7 @@ Weigh every change as a medicinal chemist, not by the score alone: try to avoid 
 Work through three tiers of edit, smallest first:
 1. Functional group edits — walk small functional group changes (methyl, methoxy, chloro, cyclopropyl, cyano, fluoro, etc.) and ring carbon-to-nitrogen substitution around the open positions, one at a time.
 2. Fragment edits — add or swap in larger fragments like N-ported piperazines or morpholines and aromatic or heteroaromatic rings like pyridine or chlorophenyl. For a ring, walk its port around the open positions (e.g., oxazole: `c1([*])cnco1`, `c1c([*])nco1`, `c1cnc([*])o1`).
-3. Core hopping — replace the scaffold the substituents hang on. First call describe_group on the old scaffold and read how its ports sit relative to one another (a fused ring lists cross-ring relations like delta/epsilon), then place the new scaffold's ports to match that pattern (e.g., a 1,3 phenyl to a 2,4 quinoline). Getting a fused ring right often takes more than one try: after the swap, read the SMILES to check each substituent landed where you meant, and if not, undo and swap again with the port labels rearranged.
+3. Core hopping — replace the scaffold the substituents hang on. First call describe_group on the old scaffold and read how its ports sit relative to one another (on a fused ring these relations are given as bond counts, e.g. `3 bonds`; a plain benzene uses ortho/meta/para), then place the new scaffold's ports to match that pattern (e.g., a 1,3 phenyl to a 2,4 quinoline). Getting a fused ring right often takes more than one try: after the swap, read the SMILES to check each substituent landed where you meant, and if not, undo and swap again with the port labels rearranged.
 
 Run through the three tiers twice, and stop once the gains dry up. On the first pass, design from the structure: call contacts (or distance) to read the residues around each group, then choose edits that suit them — an H-bond donor or acceptor reaching a polar side chain, a lipophilic group into a hydrophobic pocket, a cationic amine toward an acidic side chain (never a tetra-substituted amine), or an acid toward a cationic side chain. Make sure to check for clashes and minimize groups if necessary. On the second pass, work empirically: walk substitutions the structure did not suggest and keep whatever the score and your medicinal-chemistry judgment support.
 

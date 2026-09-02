@@ -1,1 +1,1 @@
-{"id": "abl1", "target": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Add substituents to the scaffold to build a potent, drug-like binder for this pocket (lower the predicted Vinardo affinity)."}
+{"id": "abl1", "target": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Optimize the ligand to improve predicted binding."}
