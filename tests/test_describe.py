@@ -15,8 +15,9 @@ def _fragment(smiles: str) -> Chem.Mol:
 def _positions_map(block: str) -> dict[int, dict[str, list[int]]]:
     """Parse a positions block into ``{atom_id: {label: [neighbor ids]}}``.
 
-    Neighbor tokens may carry a ``·[n*]`` port annotation; only the leading id is
-    kept, so tests assert relationships without depending on the annotation text.
+    Each neighbor is an ``[elem:id]`` token, optionally carrying a ``·[n*]`` port
+    annotation; the ``id`` is extracted so tests assert relationships without
+    depending on the element or annotation text.
     """
     out: dict[int, dict[str, list[int]]] = {}
     for line in block.splitlines():
@@ -28,8 +29,8 @@ def _positions_map(block: str) -> dict[int, dict[str, list[int]]]:
         if rels:
             for part in rels.split(";"):
                 label, _, ids = part.strip().partition(":")
-                match = [re.match(r"\d+", t.strip()) for t in ids.split(",")]
-                labels[label.strip()] = [int(m.group()) for m in match if m]
+                found = [re.search(r"\[[A-Za-z]+:(\d+)\]", t) for t in ids.split(",")]
+                labels[label.strip()] = [int(m.group(1)) for m in found if m]
         out[atom_id] = labels
     return out
 
@@ -160,14 +161,27 @@ def test_positions_aromatic_uses_ortho_meta_para():
     assert labels["para"] == _distances_from(mol, x, 3)
 
 
-def test_positions_aliphatic_uses_greek():
+def test_positions_aliphatic_uses_bond_counts():
     mol = _fragment("[1*]C1CCCCC1")  # cyclohexane: non-aromatic ring
     carbon = next(a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 6)
     labels = _positions_map(positions(mol))[carbon]
-    assert labels["alpha"] == _distances_from(mol, carbon, 1)
-    assert labels["beta"] == _distances_from(mol, carbon, 2)
-    assert labels["gamma"] == _distances_from(mol, carbon, 3)
+    assert labels["1 bond"] == _distances_from(mol, carbon, 1)
+    assert labels["2 bonds"] == _distances_from(mol, carbon, 2)
+    assert labels["3 bonds"] == _distances_from(mol, carbon, 3)
     assert "ortho" not in labels  # aromatic terms never used off an aromatic ring
+    assert "alpha" not in labels  # greek is gone
+
+
+def test_positions_five_membered_ring_uses_bond_counts():
+    # A 5-membered aromatic ring is not benzene: ortho/meta/para never apply there;
+    # its neighbours are given as plain bond counts.
+    mol = _fragment("c1ccsc1")  # thiophene
+    carbon = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == "C")
+    labels = _positions_map(positions(mol))[carbon]
+    assert labels["1 bond"] == _distances_from(mol, carbon, 1)
+    assert labels["2 bonds"] == _distances_from(mol, carbon, 2)
+    assert "ortho" not in labels
+    assert "meta" not in labels
 
 
 def test_positions_lists_hydrogen_ids_for_grow():
@@ -201,7 +215,7 @@ def test_positions_annotates_ports_on_bearer_and_as_landmark():
         if n.GetAtomicNum() > 1
     )
     line = next(ln for ln in block.splitlines() if ln.startswith(f"- atom {neighbor} "))
-    assert f"{bearer}·[1*]" in line
+    assert f":{bearer}]·[1*]" in line  # e.g. [c:0]·[1*]
 
 
 def test_positions_radius_limits_the_range():
