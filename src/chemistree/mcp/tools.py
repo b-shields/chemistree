@@ -51,9 +51,9 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
 
         Call this before ``grow`` or ``mutate`` to get the atom **position ids**:
         each heavy atom, the ids of its hydrogens (grow targets), and its
-        neighbours by bond distance — ortho/meta/para on a 6-membered aromatic
-        ring, otherwise a plain bond count — each shown as an ``[element:id]``
-        token.
+        neighbours by bond distance — ortho/meta/para on a plain benzene ring,
+        otherwise a plain bond count (fused rings included) — each shown as an
+        ``[element:id]`` token.
 
         Args:
             group_id: Id of the group to detail (from ``describe``).

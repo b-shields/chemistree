@@ -184,6 +184,19 @@ def test_positions_five_membered_ring_uses_bond_counts():
     assert "meta" not in labels
 
 
+def test_positions_fused_ring_uses_bond_counts():
+    # A fused 6,6 system (naphthalene) is not a benzene: chemists number it, so
+    # ortho/meta/para never apply -- every relation is a plain bond count.
+    mol = _fragment("c1ccc2ccccc2c1")  # naphthalene
+    block = positions(mol)
+    assert "ortho" not in block
+    assert "meta" not in block
+    assert "para" not in block
+    carbon = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == "C")
+    labels = _positions_map(block)[carbon]
+    assert labels["1 bond"] == _distances_from(mol, carbon, 1)
+
+
 def test_positions_lists_hydrogen_ids_for_grow():
     mol = _fragment("[1*]c1ccccc1")
     carbon = next(

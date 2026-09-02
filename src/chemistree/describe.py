@@ -36,11 +36,11 @@ _GROUP_LEGEND = (
     "Atom ids are `:k` (use as grow/mutate position_id); `[n*]` = port "
     "(connects groups). Nearby atoms are named as `[element:id]` tokens, with "
     "`·[n*]` marking one that bears a port.\n"
-    "Positions list each heavy atom's neighbours by bond distance. On a "
-    "6-membered aromatic ring the first three are named ortho, meta, para "
-    "(= 1, 2, 3 bonds; greek alpha, beta, gamma); every other relation is a plain "
-    "bond count (`2 bonds`, `3 bonds`, …). Grow at a listed hydrogen id; mutate a "
-    "heavy-atom id."
+    "Positions list each heavy atom's neighbours by bond distance. On a plain "
+    "benzene ring the first three are named ortho, meta, para (= 1, 2, 3 bonds; "
+    "greek alpha, beta, gamma); every other relation — a fused ring included — is "
+    "a plain bond count (`2 bonds`, `3 bonds`, …). Grow at a listed hydrogen id; "
+    "mutate a heavy-atom id."
 )
 
 _MAP_ID = re.compile(r":(\d+)]")
@@ -239,8 +239,8 @@ def positions(
     One line per heavy atom (a mutate target). Each line names the atom's element,
     the ids of its hydrogens (grow targets), any port it bears, and the heavy atoms
     within ``radius`` bonds grouped by their relation to it: ortho/meta/para when
-    both atoms are aromatic and share a 6-membered ring, otherwise the plain bond
-    count (``2 bonds``). Ports annotate the heavy atom that bears them
+    both atoms are aromatic and share a plain (non-fused) benzene ring, otherwise
+    the plain bond count (``2 bonds``). Ports annotate the heavy atom that bears them
     (``[c:4]·[3*]``), so a relation to a substituent is measured atom-to-atom, with
     no off-by-one.
 
@@ -327,18 +327,33 @@ def _relation_term(
 ) -> str:
     """Positional term for ``y`` relative to ``x`` at a bond ``distance``.
 
-    ortho/meta/para (1/2/3) when both atoms are aromatic and share a 6-membered
-    ring; otherwise the plain bond count. ortho/meta/para are benzene terms, so
-    they are withheld from 5-membered and other non-six rings.
+    ortho/meta/para (1/2/3) only when both atoms are aromatic and share a plain
+    benzene ring; otherwise the plain bond count. ortho/meta/para are benzene
+    terms, so they are withheld from 5-membered rings and from fused ring systems
+    (which chemists number instead).
     """
-    six_ring_pair = (
+    benzene_pair = (
         mol.GetAtomWithIdx(x).GetIsAromatic()
         and mol.GetAtomWithIdx(y).GetIsAromatic()
-        and any(x in ring and y in ring and len(ring) == 6 for ring in rings)
+        and _shares_benzene_ring(x, y, rings)
     )
-    if six_ring_pair and distance in _AROMATIC_TERMS:
+    if benzene_pair and distance in _AROMATIC_TERMS:
         return _AROMATIC_TERMS[distance]
     return f"{distance} bond" if distance == 1 else f"{distance} bonds"
+
+
+def _shares_benzene_ring(x: int, y: int, rings: list[set[int]]) -> bool:
+    """True when x and y share a 6-membered ring fused to no other ring.
+
+    A ring is fused when one of its atoms also belongs to another ring; ortho/
+    meta/para apply only on a standalone benzene-type ring, not across a fused
+    system.
+    """
+    for ring in rings:
+        if len(ring) == 6 and x in ring and y in ring:
+            if all(sum(a in other for other in rings) == 1 for a in ring):
+                return True
+    return False
 
 
 def _descriptor(mol: Chem.Mol, x: int, port_names: PortNames) -> str:
