@@ -32,7 +32,8 @@ When a request names a specific heterocycle you must build that exact ring. The 
 atoms and their order set the identity: Place each named substituent on the position the request
 states, counting positions by canonical ring numbering and checking the numbering afterwards.
 When you are done, read the final structure back and confirm the ring you built is the one named,
-with every substituent at the right relative position. If it does not match, fix it before you finish.
+with every substituent at the right relative position. Call `matches` with the ring's name or
+SMILES to confirm the ring is present; if it does not match, undo and rebuild before you finish.
 
 Example heteroaromatics, each as its parent ring (canonical SMILES). Attach and substitute
 by canonical ring numbering:

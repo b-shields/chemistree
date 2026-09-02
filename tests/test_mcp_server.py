@@ -66,6 +66,7 @@ def test_profile_all_registers_the_full_set():
     tools.register(mcp, SessionBackend(prime=False), profile="all")
     assert {
         "swap",
+        "matches",
         "minimize",
         "clashes",
         "write_pose",
@@ -78,6 +79,7 @@ def test_profile_2d_omits_the_pose_and_pocket_tools():
     mcp = _RecordingMCP()
     tools.register(mcp, SessionBackend(prime=False), profile="2d")
     assert "swap" in mcp.names and "describe_group" in mcp.names
+    assert "matches" in mcp.names  # a 2D check-your-work tool, always registered
     assert not {
         "minimize",
         "clashes",

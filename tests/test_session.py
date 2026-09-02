@@ -442,6 +442,39 @@ def test_residues_near_requires_a_receptor():
         session.residues_near(0)
 
 
+def test_matches_finds_a_ring_by_name_and_locates_the_group():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)  # phenyl-pyridine
+    report = session.matches("pyridine")
+    assert "pyridine" in report.lower()
+    assert "no match" not in report.lower()
+    pyridine_id = next(
+        n.id
+        for n in session.tree.nodes
+        if any(a.GetSymbol() == "N" for a in n.current.mol.GetAtoms())
+    )
+    assert f"[{pyridine_id}]" in report  # located in the pyridine group
+
+
+def test_matches_reports_no_match_and_names_the_queried_ring():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)
+    report = session.matches("c1ccc2ncncc2c1")  # quinazoline SMILES, reverse-named
+    assert "quinazoline" in report.lower()
+    assert "no match" in report.lower()
+
+
+def test_matches_whole_molecule_but_not_a_single_group():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)
+    report = session.matches("c1ccccc1-c1ccncc1")  # spans the inter-group bond
+    assert "no match" not in report.lower()  # the whole molecule matches
+    assert "not contained in any single group" in report.lower()
+
+
+def test_matches_rejects_an_unparseable_pattern():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    with pytest.raises(ValueError):
+        session.matches("$$$ not a pattern")
+
+
 def test_edits_are_undoable():
     session = DesignSession("Cc1ccccc1", three_d=False)
     start = session.smiles()

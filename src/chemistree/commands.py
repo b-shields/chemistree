@@ -24,6 +24,7 @@ def run_command(session: DesignSession, text: str) -> str:
         minimize <id> [degrees] [window]
         undo
         group <id>
+        matches <pattern>
         distance <residue>
         contacts [dist_cutoff]
         residues_near <id> <position_id|-> <cutoff>
@@ -75,6 +76,8 @@ def run_command(session: DesignSession, text: str) -> str:
         return "reverted the last edit"
     if command == "group":
         return session.describe_group(int(args[0]))
+    if command == "matches":
+        return session.matches(" ".join(args))
     if command == "distance":
         return session.distance(args[0])
     if command == "contacts":

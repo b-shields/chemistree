@@ -87,7 +87,7 @@ def test_primed_mode_blocks_the_redundant_overview_tool():
     assert "mcp__chemistree__describe" in blocked
     assert "mcp__chemistree__describe_group" not in blocked
     prompt = cmd[cmd.index("--append-system-prompt") + 1]
-    assert "describe_group, smiles, swap" in prompt  # the primed tool list
+    assert "describe_group, smiles, matches, swap" in prompt  # the primed tool list
     assert "describe, describe_group" not in prompt  # the bare overview is absent
 
 

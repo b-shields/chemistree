@@ -26,6 +26,7 @@ from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.geometry import align_transform
+from chemistree.heterocycles import heterocycle_name, heterocycle_smiles
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
 from chemistree.receptor import Receptor, Residue, min_distance
@@ -433,6 +434,49 @@ class DesignSession:
         return _residues_near_report(
             group_id, self._label(group_id), position_id, cutoff, hits
         )
+
+    def matches(self, pattern: str) -> str:
+        """Search the current molecule for a substructure, by name or SMILES/SMARTS.
+
+        Check-your-work tool: after a ring swap, confirm you built the ring you
+        meant. ``pattern`` is a heterocycle name (``"quinazoline"``) or a
+        SMILES/SMARTS query. It reports whether the whole molecule contains the
+        pattern and which single group contains it, and names the ring when the
+        pattern is a known heterocycle — so building a quinazoline and searching
+        ``"quinazoline"`` reports a match, while a quinoxaline would not.
+
+        Args:
+            pattern: A heterocycle name, or a SMILES/SMARTS substructure query.
+
+        Returns:
+            Markdown: the whole-molecule match count and the groups that contain it.
+
+        Raises:
+            ValueError: If ``pattern`` is neither a known name nor a parseable
+                SMILES/SMARTS.
+        """
+        name: str | None = None
+        named = heterocycle_smiles(pattern)
+        if named is not None:
+            query = Chem.MolFromSmiles(named)
+            name = pattern.strip().lower()
+        else:
+            query = Chem.MolFromSmiles(pattern)
+            if query is not None:
+                name = heterocycle_name(pattern)
+            else:
+                query = Chem.MolFromSmarts(pattern)
+        if query is None:
+            raise ValueError(
+                f"could not read pattern as a name, SMILES, or SMARTS: {pattern}"
+            )
+        whole = len(self.molecule().GetSubstructMatches(query, uniquify=True))
+        group_hits = [
+            (node.id, self._label(node.id))
+            for node in self.tree.nodes
+            if node.id is not None and node.current.mol.HasSubstructMatch(query)
+        ]
+        return _matches_report(pattern, name, whole, group_hits)
 
     def minimize(
         self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
@@ -991,6 +1035,26 @@ def _residues_near_report(
     lines += ["| residue | distance (A) |", "|---|---|"]
     for residue, distance in hits:
         lines.append(f"| {residue.name}{residue.number} | {distance:.2f} |")
+    return "\n".join(lines)
+
+
+def _matches_report(
+    pattern: str, name: str | None, whole: int, group_hits: list[tuple[int, str]]
+) -> str:
+    """Render the substructure-search report; ``name`` labels a known ring."""
+    header = f"# Substructure `{pattern}`"
+    if name:
+        header += f" ({name})"
+    lines = [header, ""]
+    if whole == 0:
+        lines.append("Whole molecule: no match.")
+        return "\n".join(lines)
+    lines.append(f"Whole molecule: {whole} {'match' if whole == 1 else 'matches'}.")
+    if group_hits:
+        groups = ", ".join(f"[{gid}] {label}" for gid, label in group_hits)
+        lines.append(f"Contained in group(s): {groups}.")
+    else:
+        lines.append("Not contained in any single group.")
     return "\n".join(lines)
 
 

@@ -31,7 +31,10 @@ refreshed after every edit — read them to keep the molecule drug-like.
 # Core hopping with the tools
 
 For a core hop, first call describe_group on the old scaffold and read how its ports sit
-relative to one another (a fused ring lists cross-ring relations like delta/epsilon), then
-place the new scaffold's ports to match. Getting a fused ring right often takes more than one
-try: after the swap, read the SMILES to check each substituent landed where you meant, and if
-not, undo and swap again with the port labels rearranged.
+relative to one another (on a fused ring these relations are given as bond counts, e.g.
+`3 bonds`; a plain benzene uses ortho/meta/para), then place the new scaffold's ports to match.
+Getting a fused ring right often takes more than one try. After the swap, verify two things:
+call matches with the new ring's name or SMILES to confirm you built the right ring (a
+quinazoline is not a quinoxaline), and call describe_group to confirm each substituent's port
+sits at the intended position (the 2-position carbon has a ring N one bond away on each side).
+If either is wrong, undo and swap again with the ring or port labels corrected.

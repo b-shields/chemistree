@@ -79,7 +79,9 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         order and can put substituents in the wrong spots. To change a group and
         drop a substituent, ``remove`` that substituent leaf first (freeing its
         port), then swap the lower-port group. A port-count error names the ports
-        and how to proceed.
+        and how to proceed. To place a port on a ring atom, branch it:
+        ``Cc1nc([1*])nc2ccccc12`` puts ``[1*]`` on the quinazoline 2-position (the
+        carbon between the two ring nitrogens).
 
         When users ask to add a heterocycle they will typically use canonical
         numbering (atomic number priority around the ring) to refer to the H
@@ -146,6 +148,22 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
     def undo() -> str:
         """Revert the most recent edit (swap, grow, mutate, or remove)."""
         return backend.run("undo", with_state=backend.prime)
+
+    @mcp.tool
+    def matches(pattern: str) -> str:
+        """Check your work: search the current molecule for a substructure.
+
+        Use this to make sure a heterocycle ring swap produced the correct cycle —
+        after building a quinazoline, ``matches("quinazoline")`` should report a
+        match; a quinoxaline would not. ``pattern`` is a heterocycle name (e.g.
+        ``"quinazoline"``, ``"oxazole"``) or a SMILES/SMARTS query. The result says
+        whether the whole molecule contains the pattern and which group contains it,
+        and names the ring when the pattern is a known heterocycle.
+
+        Args:
+            pattern: A heterocycle name, or a SMILES/SMARTS substructure query.
+        """
+        return backend.run(f"matches {pattern}")
 
     if profile == "2d":  # no pocket or pose tools for a receptor-free task
         return
