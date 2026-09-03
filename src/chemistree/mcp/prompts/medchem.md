@@ -31,8 +31,8 @@ protonate only the most basic one (e.g. `c1ccccc1N2CC[NH2+]CC2`).
 When a request names a specific heterocycle you must build that exact ring. The ring
 atoms and their order set the identity: Place each named substituent on the position the request
 states, counting positions by canonical ring numbering and checking the numbering afterwards.
-When you are done, read the final structure back and confirm the ring you built is the one named,
-with every substituent at the right relative position. Call `matches` with the ring's name or
+Before you give your final molecule, read the final structure back and confirm the ring you built
+is the one named, with every substituent at the right relative position. Call `matches` with the ring's name or
 SMILES: it confirms the ring is present and reports where each substituent sits by IUPAC locant,
 so a right ring with a substituent on the wrong carbon shows. If the ring is absent or any
 substituent is at the wrong locant, undo and rebuild before you finish.

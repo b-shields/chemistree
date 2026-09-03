@@ -13,7 +13,10 @@ carbon shows. Check every locant against what the request asked (both the attach
 kept substituents), and if any sits at the wrong locant, undo and swap again with the ports
 and substituents rearranged. Do not accept a partly-wrong ring, and do not strip substituents
 you meant to keep. If a swap or grow returns an error, the group SMILES was wrong — fix that SMILES and
-retry the same edit. A few deliberate moves beat a flurry of trial-and-error.
+retry the same edit. A few deliberate moves beat a flurry of trial-and-error. Before you give a
+final molecule, if you built or changed a named ring, run this check once more — read the
+reported locants or call `matches` — and do not finish with a ring or substituent you have not
+verified against the request.
 
 # Reading the pocket and the score
 
