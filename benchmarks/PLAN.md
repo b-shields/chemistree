@@ -34,6 +34,13 @@ Read the "Status & decisions" block first, then the rest top to bottom.
 **Decisions locked:**
 - **Prompt parity**: the task prompt is byte-identical across arms; only the system prompt
   (mechanics ± guidance) differs, and both are recorded per row.
+- **Tool-borne ring knowledge (measured, stated)**: chemistree's tools carry the curated
+  heterocycle knowledge — swap/grow take a ring by name with port locants
+  (`swap 0 quinazoline 3@2 4@6`), backed by the vendored `HETEROCYCLES`/`RING_POSITIONS`, with
+  per-edit ring-position feedback and a `matches` check. The shared medchem prompt no longer
+  lists ring SMILES, so the generalist/naked arms rely on the model's own knowledge to write
+  rings. This asymmetry is the effect under test and is stated in the README, not hidden — the
+  task prompt stays identical across arms.
 - **Metrics**: accuracy = correctness; **efficiency = cost/tokens** (immune to API latency and
   machine sleep). The per-case timeout is a **600 s hang-guard, not a metric** — wall time is
   model thinking + API round-trips, and a closed laptop counts against it. Run on a machine that

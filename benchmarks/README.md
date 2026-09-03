@@ -15,6 +15,17 @@ Same model, same case; only the tool surface differs (see `arms.py`):
 - **naked** — no tools; reasons over the SMILES in the prompt. 2D only — with no 3D access it
   is dropped from both 3D tracks.
 
+**What chemistree gives its agent — and the others don't.** This is the comparison the
+benchmark measures, so we state it plainly. The chemistree arm's tools carry curated domain
+knowledge and structure: a vendored set of named heteroaromatic rings (name ⇄ canonical SMILES
+plus IUPAC numbering), a fragment-tree representation with stable atom and group ids, per-edit
+ring-position feedback, and a `matches` check. The agent builds a ring by name
+(`swap 0 quinazoline 3@2 4@6`) and is told where each substituent landed. The shared medchem
+prompt deliberately no longer lists ring SMILES, so the **generalist** and **naked** arms rely on
+the model's own chemistry knowledge to write those rings — the same knowledge chemistree supplies
+through its tools. The task prompt is still byte-identical across arms; the difference is exactly
+this tool-borne knowledge, which is the effect under test.
+
 ## Setup
 
 1. **The `chemistree` env** — see the [top-level README](../README.md#setup)
