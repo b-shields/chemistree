@@ -1,7 +1,61 @@
 # chemistree benchmark plan
 
-Status: **design, not yet built.** This document is the hand-off so the work can
-continue on another machine. Read it top to bottom before writing code.
+Status (2026-09-03): **the harness and the abl1 worked example are built; the next step is
+the rest of DUD-Z.** This document is the hand-off so the work continues on another machine.
+Read the "Status & decisions" block first, then the rest top to bottom.
+
+## Status & decisions (2026-09-03)
+
+**Built and validated:**
+- **Runner** `benchmarks/run.py` + `arms.py` — one isolated `claude -p` per case; three arms
+  (chemistree / generalist / naked); routes `edit2d` / `decorate` (B1) / `probe` (B2) by the
+  case's fields; records `prompt`, `system_prompt`, tokens, cost, turns, and (chemistree arm) a
+  per-tool trace (`--trace`).
+- **MCP** `chemistree/mcp/` — shared `tools.py` (one source of the tool docstrings) against an
+  in-process (`server.py`, the `chemistree-mcp` script) or HTTP (`app/mcp.py`) backend, with
+  `bind`, `--tools {all,2d}`, `--trace`. Tool set now includes **`residues_near`**
+  (group → the residues it contacts) and **`matches`** (substructure check by heterocycle name
+  or SMILES/SMARTS), plus `write_pose`.
+- **Agent-facing representation**: position descriptors use ortho/meta/para only on an isolated
+  benzene ring, plain bond counts elsewhere, and `[element:id]` atom tokens (greek removed);
+  **canonical IUPAC ring numbering is reported on every ring-changing edit**
+  (`quinazoline (IUPAC numbering): [3*] at C2, [4*] at C6`), backed by `heterocycles.py`
+  (35 vendored rings: name ⇄ SMILES + IUPAC numbering; purine/pyrrolotriazine numbering
+  deferred → `None`).
+- **Guidance** split three ways: `app/system_prompt.md` (app voice, demo-only), shared
+  `mcp/prompts/medchem.md` (tool-agnostic playbook + the 35-ring heterocycle table +
+  build-the-exact-ring rule), `mcp/prompts/tools.md` (chemistree tool usage + a deliberate-
+  editing / check-the-reported-locant nudge). Guidance is applied on **all** tracks (not just
+  decorate); `--no-guidance` is the ablation. App parity is kept **except** where the app
+  deliberately wants its natural chemist voice.
+- **Oracle** `oracle_smina.py` (redock + score_only, Vinardo); **`tasks/strip_murcko.py`**
+  (crystal → posed Murcko scaffold). abl1 taken through 2D + B1 + B2 as the worked example.
+
+**Decisions locked:**
+- **Prompt parity**: the task prompt is byte-identical across arms; only the system prompt
+  (mechanics ± guidance) differs, and both are recorded per row.
+- **Metrics**: accuracy = correctness; **efficiency = cost/tokens** (immune to API latency and
+  machine sleep). The per-case timeout is a **600 s hang-guard, not a metric** — wall time is
+  model thinking + API round-trips, and a closed laptop counts against it. Run on a machine that
+  will not sleep; treat a timeout as a genuine stall only after ruling out a sleep artifact.
+- **Data**: pull only the per-target receptor + crystal ligand (DUD-Z prepped files, or RCSB by
+  id) — never the full dumps. Use the **same ligand** for 2D (as SMILES) and 3D; B1 strips it to
+  its Murcko scaffold, while 2D and B2 use the full substituted ligand.
+- **Scoring**: 2D = canonical-SMILES match to a computed gold, per category; B1 = redock Δ vs the
+  redocked-scaffold baseline + the chemistree `write_pose` score-only pose + ECFP4 recovery to
+  the crystal; B2 = answer match. smina lives in its own conda env (openbabel conflicts with
+  py3.14) and is read via `SMINA_BIN`.
+- **Results**: commit the worked-example rows **uncompressed** under `results/test_{2d,3d}/`
+  (not tar.gz); the runner overwrites each `--out` file and `test_abl1.sh` clears them first, so
+  no manual clearing. Large fetched structures live in gitignored `benchmarks/data/`.
+
+**Next step — the rest of DUD-Z** (see §5 and §8): shortlist drug-like targets; per target pick
+the crystal ligand and generate 2D (substitution / growing / core-hop) cases with computed golds,
+one B1 scaffold-recovery case, and a few B2 probes; run all arms with **n > 1 per case** (haiku is
+stochastic — the failing 2D case shuffles run-to-run); then a sonnet pass and an edit budget.
+
+This document is the hand-off; the sections below are the original design and remain the
+authoritative detail. Where a detail here differs from an older section, this block wins.
 
 ## 0. The claim we are testing
 
@@ -524,7 +578,13 @@ src/chemistree/mcp/
 
 ## 8. Build order (suggested)
 
-1. **MCP server package `chemistree/mcp/`**: move `run_command` to core
+**Status:** steps 1, 2, 5, 6 are **done** and validated on abl1 (see the Status block above).
+The actionable next step is **3–4 (the DUD-Z expansion)**, then n > 1, the optional sonnet
+pass, and summaries.
+
+1. **MCP server package `chemistree/mcp/`** — **done** (incl. `residues_near`, `matches`,
+   `write_pose`, the app Save (SDF) button, the 2D-edit-path tests, and the README). Original
+   detail: move `run_command` to core
    `chemistree/commands.py`; `tools.py` (shared registrations, incl. the new `write_pose`
    tool) + `server.py` with the `bind` tool, full demo tool set, `--tools {all,2d}` profile,
    `--trace` benchmark mode, and the `chemistree-mcp` poetry script. Refactor `app/mcp.py`
@@ -545,11 +605,11 @@ src/chemistree/mcp/
 4. **Track A**: `tasks/gen_2d.py` — generate substitution / growing / core-hop cases with
    computed gold from the ligand SMILES; `score_2d.py` (canonical match, per category).
    Run arms N, G, C; report per-category accuracy + efficiency.
-5. **Track B (scaffold recovery)**: `tasks/strip_murcko.py` (crystal → posed Murcko
-   scaffold + keep the crystal as target); `score_3d.py` (redock Δ vs scaffold baseline +
-   Tanimoto/R-group recovery to the crystal + validity gate); wire into `run.py`'s 3D path
-   (seed the scaffold, add recovery to the row). Run arms C, then G and N.
-6. **Track B2** understanding probes (optional, cheap).
+5. **Track B (scaffold recovery)** — **done** for abl1: `tasks/strip_murcko.py`, redock Δ vs
+   scaffold baseline + chemistree `write_pose` score-only + ECFP4 recovery, wired into
+   `run.py`'s 3D path (guided + `--no-guidance` ablation). Reuse per DUD-Z target.
+6. **Track B2** understanding probes — **done** for abl1 (`abl1_3d_probes.jsonl`). Add per
+   target.
 7. **Sonnet** (optional; confirm before acting) secondary run for the "cheap model catches
    up" result.
 8. Summaries + plots for the blog post.
@@ -570,12 +630,13 @@ src/chemistree/mcp/
   tools via `conda run -n chemistree poetry run ...`. See `CLAUDE.md` for conventions
   (TDD, Google docstrings, black 88). pre-commit runs black/ruff/mypy — run pytest
   yourself.
-- Extra benchmark deps: `smina` for Track B (conda-installable from bioconda; must be on
-  PATH for arm G and the oracle), and `obabel` if bare-prep needs it. RDKit (already a core
-  dep) covers 2D case generation and scoring. The optional ChemCoTBench follow-on would add
-  HF `datasets`.
+- Extra benchmark deps: **`smina` in its own conda env** for Track B (its openbabel dependency
+  conflicts with the chemistree env's Python 3.14): `conda create -n smina -c conda-forge smina`,
+  then `export SMINA_BIN="$(conda run -n smina which smina)"` — the runner and the generalist arm
+  read `SMINA_BIN`. RDKit (already a core dep) covers 2D case generation and scoring.
 - `claude` CLI must be on PATH (the harness spawns it, as `app/chat.py` already does).
-- `.gitignore`: **ignore `benchmarks/data/`** (large, re-fetchable — commit the fetch/prep
-  scripts, not the payloads) and ignore raw `benchmarks/results/*.jsonl`, but **commit
-  `benchmarks/results/*.tar.gz`** (tar.gz the run's JSONL before pushing, so the evidence
-  travels with the repo across machines).
+- `.gitignore`: **ignore `benchmarks/data/`** (large fetched structures, re-fetchable — commit the
+  fetch/prep scripts, not the payloads). The **worked-example result rows** under
+  `benchmarks/results/test_{2d,3d}/` are committed **uncompressed** as the canonical example
+  (this supersedes the earlier tar.gz plan); the runner overwrites each `--out` file and
+  `test_abl1.sh` clears them first, so no manual clearing is needed.

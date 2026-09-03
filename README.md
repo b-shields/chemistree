@@ -60,13 +60,17 @@ The MCP tools run against the live session, so every edit updates the 2D and 3D 
 real time:
 
 - **Inspect** — `describe` (the group listing), `describe_group` (one group's atom
-  positions and ring neighbourhood), `smiles`.
+  positions and ring neighbourhood), `smiles`, `matches` (search the molecule for a
+  substructure by heterocycle name or SMILES/SMARTS — a check-your-work tool).
 - **Edit** — `swap` (replace a group), `grow` (add a group at a hydrogen), `mutate`
-  (change one atom's element), `remove` (delete a leaf), `undo`.
+  (change one atom's element), `remove` (delete a leaf), `undo`. After a ring-changing
+  edit the result names the resulting ring and each attachment's IUPAC locant, e.g.
+  `quinazoline (IUPAC numbering): [3*] at C2, [4*] at C6`.
 - **3D / pocket** — `distance` (each group's distance to a residue), `contacts` (map the
-  binding site), `clashes` (report steric overlaps), `minimize` (settle a group about its
-  attachment bond to its best-scoring rotamer by the full Vinardo energy), `write_pose`
-  (save the current 3D pose to an SDF).
+  binding site), `residues_near` (the residues a chosen group or atom contacts),
+  `clashes` (report steric overlaps), `minimize` (settle a group about its attachment
+  bond to its best-scoring rotamer by the full Vinardo energy), `write_pose` (save the
+  current 3D pose to an SDF).
 
 The group listing ends with a physicochemical profile (MW, cLogP, TPSA, H-bond
 donors/acceptors, rotatable bonds, aromatic rings, Fsp3, charge), a structure-alert line
@@ -109,7 +113,10 @@ for a receptor-free task; `--trace <path.jsonl>` logs one record per tool call.
 - `scoring.py` — the Vinardo function: intermolecular (binding) and intramolecular
   (strain) energy, vendored from cmxflow.
 - `describe.py` / `annotations.py` — the agent-facing group listing and the
-  chemist's-terms atom positions (ortho/meta/para, greek by bond count).
+  chemist's-terms atom positions (ortho/meta/para on a plain benzene ring, plain bond
+  counts elsewhere, each neighbour shown as its `[element:id]` token).
+- `heterocycles.py` — the vendored named heteroaromatic rings (name ⇄ canonical SMILES)
+  and their IUPAC ring numbering, backing `matches` and the ring-position feedback.
 - `mcp/` — the shared MCP tool set (one source of the tool docstrings) and the standalone
   `chemistree-mcp` server that hosts its own session.
 - `app/` — the FastAPI server, the single-page viewer, and the app's HTTP MCP server.
