@@ -1,0 +1,3 @@
+{"id": "grow-nitrile", "category": "growing", "instruction": "Add a nitrile to the phenol ring, ortho to the hydroxyl.", "gold": "N#Cc1cc(CCNc2nc(N)n3nc(-c4ccco4)nc3n2)ccc1O", "smiles": "Nc1nc(NCCc2ccc(O)cc2)nc2nc(-c3ccco3)nn12"}
+{"id": "core-benzofuran", "category": "core_hopping", "instruction": "Fuse a benzene onto the furan to make a benzofuran, keeping the attachment at the 2-position.", "gold": "Nc1nc(NCCc2ccc(O)cc2)nc2nc(-c3cc4ccccc4o3)nn12", "smiles": "Nc1nc(NCCc2ccc(O)cc2)nc2nc(-c3ccco3)nn12"}
+{"id": "sub-methoxy", "category": "substitution", "instruction": "O-methylate the phenol to a methyl ether (methoxy).", "gold": "COc1ccc(CCNc2nc(N)n3nc(-c4ccco4)nc3n2)cc1", "smiles": "Nc1nc(NCCc2ccc(O)cc2)nc2nc(-c3ccco3)nn12"}

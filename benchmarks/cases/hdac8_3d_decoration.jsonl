@@ -1,0 +1,1 @@
+{"id": "hdac8", "target": "benchmarks/data/hdac8/reference.sdf", "receptor": "benchmarks/data/hdac8/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

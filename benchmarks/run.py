@@ -356,6 +356,7 @@ def run_case(
     workdir: Path,
     trace: bool = False,
     guidance_on: bool = True,
+    replicate: int = 1,
 ) -> dict:
     """Run one case and return its result row (prompts, metrics, and scoring).
 
@@ -367,6 +368,8 @@ def run_case(
         workdir: Directory for the mcp-config and scratch files.
         trace: Whether the chemistree server logs a per-tool-call trace.
         guidance_on: When False, the medchem guidance is dropped (the ablation).
+        replicate: 1-based sample index; recorded on the row and used to keep each
+            sample's trace file distinct when ``--repeat`` runs a case more than once.
 
     Returns:
         The result row.
@@ -385,7 +388,7 @@ def run_case(
     trace_path = None
     if arm.uses_chemistree:
         if trace:
-            trace_path = workdir / f"trace_{item['id']}.jsonl"
+            trace_path = workdir / f"trace_{item['id']}_r{replicate}.jsonl"
         mcp_config = workdir / f"mcp_{item['id']}.json"
         config = arms.chemistree_mcp_config(
             arm.tools_profile, str(trace_path) if trace_path else None
@@ -400,6 +403,7 @@ def run_case(
 
     row: dict = {
         "id": item["id"],
+        "replicate": replicate,
         "arm": arm.name,
         "model": model,
         "guidance": guidance_on,
@@ -512,6 +516,13 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int, help="Run only the first N cases.")
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Samples per case (haiku is stochastic). Each case is run this many "
+        "times, writing one row per sample to --out, tagged with a 'replicate' index.",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=600,
@@ -551,18 +562,21 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as handle:
         for item in items:
-            row = run_case(
-                arm,
-                item,
-                args.model,
-                args.timeout,
-                workdir,
-                args.trace,
-                guidance_on=not args.no_guidance,
-            )
-            handle.write(json.dumps(row) + "\n")
-            handle.flush()
-            print(f"[{row['status']}] {row['id']} ({arm.name}) {_summary(row)}")
+            for replicate in range(1, args.repeat + 1):
+                row = run_case(
+                    arm,
+                    item,
+                    args.model,
+                    args.timeout,
+                    workdir,
+                    args.trace,
+                    guidance_on=not args.no_guidance,
+                    replicate=replicate,
+                )
+                handle.write(json.dumps(row) + "\n")
+                handle.flush()
+                tag = f"{row['id']} r{replicate}" if args.repeat > 1 else row["id"]
+                print(f"[{row['status']}] {tag} ({arm.name}) {_summary(row)}")
 
 
 def _summary(row: dict) -> str:

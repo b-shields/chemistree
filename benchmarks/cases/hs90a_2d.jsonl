@@ -1,0 +1,2 @@
+{"id": "sub-nitrile", "category": "substitution", "instruction": "Replace the ring fluorine with a nitrile.", "gold": "COc1ccc(OC)c(Cc2nc3nc(C#N)nc(N)c3[nH]2)c1", "smiles": "COc1ccc(OC)c(Cc2nc3nc(F)nc(N)c3[nH]2)c1"}
+{"id": "grow-dimethylamino", "category": "growing", "instruction": "Add a dimethylamino on the dimethoxybenzene, ortho to the methylene link.", "gold": "COc1ccc(OC)c(N(C)C)c1Cc1nc2nc(F)nc(N)c2[nH]1", "smiles": "COc1ccc(OC)c(Cc2nc3nc(F)nc(N)c3[nH]2)c1"}

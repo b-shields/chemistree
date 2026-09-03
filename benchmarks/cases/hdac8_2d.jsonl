@@ -1,0 +1,2 @@
+{"id": "grow-oxetane", "category": "growing", "instruction": "Add an oxetan-3-yl para on the phenyl of the phenylacetyl group.", "gold": "Cn1cc(C(=O)Cc2ccc(C3COC3)cc2)cc1C=CC(=O)NO", "smiles": "Cn1cc(C(=O)Cc2ccccc2)cc1C=CC(=O)NO"}
+{"id": "core-thiophene", "category": "core_hopping", "instruction": "Replace the phenacyl phenyl with a 2-thienyl (contract the benzene to a thiophene), keeping the methylene attachment.", "gold": "Cn1cc(C(=O)Cc2cccs2)cc1C=CC(=O)NO", "smiles": "Cn1cc(C(=O)Cc2ccccc2)cc1C=CC(=O)NO"}

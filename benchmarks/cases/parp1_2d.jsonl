@@ -1,0 +1,2 @@
+{"id": "grow-fluoro", "category": "growing", "instruction": "Add a second fluorine on the fluorophenyl ring, para to the fluorine.", "gold": "NC(=O)c1cccc2nc(-c3cc(F)c(C4CCCCN4)cc3F)[nH]c12", "smiles": "NC(=O)c1cccc2nc(-c3ccc(C4CCCCN4)cc3F)[nH]c12"}
+{"id": "core-piperazine", "category": "core_hopping", "instruction": "Change the piperidine to a piperazine (replace the ring CH2 para to the nitrogen with an NH).", "gold": "NC(=O)c1cccc2nc(-c3ccc(C4CNCCN4)cc3F)[nH]c12", "smiles": "NC(=O)c1cccc2nc(-c3ccc(C4CCCCN4)cc3F)[nH]c12"}

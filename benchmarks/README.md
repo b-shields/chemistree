@@ -49,26 +49,56 @@ reaches the molecule, plus optional guidance). Each result row records both `pro
 line; a probe agent ends with `FINAL_ANSWER:`. The runner parses it and records token
 usage, cost, turns, and — for the chemistree arm — a per-tool trace.
 
-The whole abl1 mock-up (all arms, 2D + 3D) runs from one script:
+The whole benchmark runs from one parallel script, **`run_benchmark.sh`**. For each target it
+launches the full arm × track matrix at once (2D: naked/generalist/chemistree; 3D probes and
+decoration: generalist/chemistree, decoration also with the `--no-guidance` ablation), batched
+per target, then moves to the next. Defaults are **n = 3 samples on haiku**.
 
 ```bash
-SMINA_BIN="$(conda run -n smina which smina)" bash benchmarks/test_abl1.sh
+# 1. Smoke-test on abl1 first (reuses the abl1 case files):
+bash benchmarks/run_benchmark.sh abl1
+
+# 2. Then the full 10-target DUD-Z set:
+bash benchmarks/run_benchmark.sh
+
+# preview the exact job list without running or spending anything:
+DRY=1 bash benchmarks/run_benchmark.sh
 ```
 
-Single arm / case set:
+Env knobs (all optional): `REPEAT` (samples/case, default 3), `MODEL` (default `haiku`;
+`sonnet` for the stronger pass), `TIMEOUT` (600 s hang-guard), `MAXPAR` (concurrent-run cap,
+default 10; needs bash 4.3+), `TRACE=1` (per-tool traces), `SMINA_BIN`, `OUT` (default
+`results/full`).
+
+Results land under `benchmarks/results/full/<target>/` — one file per arm × track, each with
+one row per case × sample (tagged with a `replicate` index):
+
+```
+results/full/<target>/
+  2d_{naked,generalist,chemistree}.jsonl
+  probes_{generalist,chemistree}.jsonl
+  decorate_{generalist,chemistree}[_noguid].jsonl
+```
+
+Old results are cleared per target on rerun (`run.py` overwrites each `--out`; the script
+`rm -rf`s each target dir first), so just re-run — no manual clearing.
+
+**Regenerating the cases.** The case files, Murcko scaffold seeds, and probe answers are all
+produced by `python -m benchmarks.gen_cases` (reads `data/manifest.jsonl`). Golds and probe
+answers are computed and self-checked with RDKit / numpy, **independent of the chemistree tools
+under test**. Review every case (prompt + input + expected output) in
+[`notebooks/check-test-structures.ipynb`](../notebooks/check-test-structures.ipynb).
+
+Single arm / case set, or the original abl1 worked-example script:
 
 ```bash
-conda activate chemistree
-python -m benchmarks.run --items benchmarks/cases/abl1_2d.jsonl --arm chemistree
-python -m benchmarks.run --items benchmarks/cases/abl1_2d.jsonl --arm naked --dry-run  # print commands only
+python -m benchmarks.run --items benchmarks/cases/egfr_2d.jsonl --arm chemistree
+python -m benchmarks.run --items benchmarks/cases/egfr_2d.jsonl --arm naked --dry-run  # print only
+bash benchmarks/test_abl1.sh   # the original single-target script (-> results/test_2d, test_3d)
 ```
 
-Flags: `--arm {chemistree,generalist,naked}`, `--model` (default `haiku`), `--out`,
-`--limit`, `--timeout`, `--no-guidance` (drop the strategy layer — the base-prompt ablation).
-
-**Clearing results?** Not needed. `run.py` opens `--out` in write mode, so each file is
-**overwritten** every run, and `test_abl1.sh` also `rm -f`s `results/test_2d` and
-`results/test_3d` at the start. Just re-run.
+Flags: `--arm {chemistree,generalist,naked}`, `--model` (default `haiku`), `--out`, `--limit`,
+`--repeat` (samples/case), `--timeout`, `--no-guidance` (drop the strategy layer — the ablation).
 
 **Timeout & what we measure.** The per-case timeout is a **generous hang-guard** (600 s), not
 a metric: tools run locally in milliseconds, so wall time is model thinking + API round-trips

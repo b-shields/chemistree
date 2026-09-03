@@ -1,0 +1,1 @@
+{"id": "parp1", "target": "benchmarks/data/parp1/reference.sdf", "receptor": "benchmarks/data/parp1/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

@@ -1,0 +1,1 @@
+{"id": "hivpr", "target": "benchmarks/data/hivpr/reference.sdf", "receptor": "benchmarks/data/hivpr/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

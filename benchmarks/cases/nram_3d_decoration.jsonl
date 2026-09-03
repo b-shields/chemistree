@@ -1,0 +1,1 @@
+{"id": "nram", "target": "benchmarks/data/nram/reference.sdf", "receptor": "benchmarks/data/nram/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

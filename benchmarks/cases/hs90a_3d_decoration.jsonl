@@ -1,0 +1,1 @@
+{"id": "hs90a", "target": "benchmarks/data/hs90a/reference.sdf", "receptor": "benchmarks/data/hs90a/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

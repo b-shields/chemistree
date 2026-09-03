@@ -1,0 +1,1 @@
+{"id": "aa2ar", "target": "benchmarks/data/aa2ar/reference.sdf", "receptor": "benchmarks/data/aa2ar/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

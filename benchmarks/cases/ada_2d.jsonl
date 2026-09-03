@@ -1,0 +1,2 @@
+{"id": "core-triazole", "category": "core_hopping", "instruction": "Aza-substitute the imidazole C2 (between the two ring nitrogens) to a nitrogen, making a 1,2,3-triazole.", "gold": "CC(O)C(CCc1cccc2ccccc12)n1cc(C(N)=O)nn1", "smiles": "CC(O)C(CCc1cccc2ccccc12)n1cnc(C(N)=O)c1"}
+{"id": "sub-nitrile", "category": "substitution", "instruction": "Dehydrate the imidazole carboxamide to a nitrile.", "gold": "CC(O)C(CCc1cccc2ccccc12)n1cnc(C#N)c1", "smiles": "CC(O)C(CCc1cccc2ccccc12)n1cnc(C(N)=O)c1"}
