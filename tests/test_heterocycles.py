@@ -3,11 +3,13 @@
 import pathlib
 import re
 
+import pytest
 from rdkit import Chem
 
 from chemistree.heterocycles import (
     HETEROCYCLES,
     RING_POSITIONS,
+    build_ported_ring,
     heterocycle_name,
     heterocycle_smiles,
     named_ring_locants,
@@ -179,3 +181,39 @@ def test_ring_locant_summary_reports_a_port_and_a_baked_substituent():
 
 def test_ring_locant_summary_none_for_a_carbocycle():
     assert ring_locant_summary(Chem.MolFromSmiles("c1ccccc1")) is None
+
+
+def _ports_by_locant(mol):
+    """Map each dummy port's isotope label to the IUPAC locant it sits on."""
+    _, pos = number_ring_system(mol)
+    return {
+        a.GetIsotope(): pos[a.GetNeighbors()[0].GetIdx()]
+        for a in mol.GetAtoms()
+        if a.GetAtomicNum() == 0
+    }
+
+
+def test_build_ported_ring_places_each_port_at_its_locant():
+    ring = build_ported_ring("quinazoline", [(3, 2), (4, 6)])
+    assert number_ring_system(ring)[0] == "quinazoline"
+    assert _ports_by_locant(ring) == {3: 2, 4: 6}  # [3*] at C2, [4*] at C6
+
+
+def test_build_ported_ring_bare_port_for_grow():
+    ring = build_ported_ring("pyridine", [(0, 3)])
+    dummies = [a for a in ring.GetAtoms() if a.GetAtomicNum() == 0]
+    assert len(dummies) == 1 and dummies[0].GetIsotope() == 0  # a single bare [*]
+    assert _ports_by_locant(ring) == {0: 3}
+
+
+def test_build_ported_ring_rejects_a_ring_nitrogen_locant():
+    # quinazoline position 1 is a ring nitrogen with no free valence for a port
+    with pytest.raises(ValueError, match="no free valence"):
+        build_ported_ring("quinazoline", [(3, 1)])
+
+
+def test_build_ported_ring_rejects_an_unnumbered_or_unknown_name():
+    with pytest.raises(ValueError, match="not a named ring"):
+        build_ported_ring("benzene", [(1, 1)])  # not a vendored ring
+    with pytest.raises(ValueError, match="not a named ring"):
+        build_ported_ring("purine", [(1, 2)])  # vendored but numbering deferred

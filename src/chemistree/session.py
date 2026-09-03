@@ -28,6 +28,7 @@ from chemistree.fragmenter import fragment
 from chemistree.geometry import align_transform
 from chemistree.heterocycles import (
     HETEROCYCLES,
+    build_ported_ring,
     heterocycle_name,
     heterocycle_smiles,
     named_ring_locants,
@@ -175,7 +176,10 @@ class DesignSession:
 
         Args:
             group_id: Id of the group to replace.
-            group: A curated group name or a SMILES/Mol with matching ports.
+            group: A curated group name, a SMILES/Mol with matching ``[*]`` ports,
+                or a vendored ring by name with port locants
+                (``"quinazoline 3@2 4@6"`` — each of the group's port labels at an
+                IUPAC ring position).
 
         Raises:
             ValueError: If the group cannot be parsed, or its ports do not match
@@ -189,9 +193,11 @@ class DesignSession:
             else None
         )
         posed = node.current.mol.GetNumConformers() > 0
+        named = _named_ring_group(group) if isinstance(group, str) else None
+        target = named if named is not None else group
         try:
             region = swap_region(
-                node.current, _as_group(group), anchor_label=anchor_label
+                node.current, _as_group(target), anchor_label=anchor_label
             )
         except ValueError as error:
             raise self._port_mismatch_error(group_id, error) from error
@@ -247,7 +253,8 @@ class DesignSession:
         Args:
             group_id: Id of the group bearing the hydrogen.
             position_id: Atom id of the hydrogen to replace.
-            group: A curated group name or a SMILES/Mol with one port.
+            group: A curated group name, a SMILES/Mol with one ``[*]`` port, or a
+                vendored ring by name with the attachment locant (``"pyridine 3"``).
 
         Returns:
             Id of the group that now carries the grown group (a new node when the
@@ -257,7 +264,9 @@ class DesignSession:
             ValueError: If ``position_id`` is not a hydrogen of the group.
         """
         node = self.tree.node(group_id)
-        region = grow_region(node.current, position_id, _as_group(group))
+        named = _named_ring_group(group) if isinstance(group, str) else None
+        target = named if named is not None else group
+        region = grow_region(node.current, position_id, _as_group(target))
         with self._edit():
             sub_nodes = self._apply(node, region)
         grown = max(sub_nodes, key=lambda n: n.id if n.id is not None else -1)
@@ -1181,6 +1190,50 @@ def _element_number(element: str) -> int:
     if number <= 0:
         raise ValueError(f"unknown element: {element!r}")
     return int(number)
+
+
+def _named_ring_group(group: str) -> Chem.Mol | None:
+    """Parse a ``<ring> <label>@<locant> …`` spec into a ported ring Mol, or None.
+
+    The named-ring input to swap and grow: the first token is a vendored ring name,
+    the rest are port placements — ``<label>@<locant>`` (swap, the label is one of the
+    group's ports) or a bare ``<locant>`` (grow, a single unlabeled port). Returns None
+    when the string is not a named-ring spec, so the caller falls back to the
+    SMILES/curated-name path.
+
+    Args:
+        group: The group string as typed.
+
+    Returns:
+        The ported ring Mol, or None when ``group`` does not name a vendored ring.
+
+    Raises:
+        ValueError: If a named ring is given without a parseable port placement.
+    """
+    tokens = group.split()
+    if not tokens or tokens[0].lower() not in HETEROCYCLES:
+        return None
+    name = tokens[0].lower()
+    placements: list[tuple[int, int]] = []
+    for token in tokens[1:]:
+        label_str, sep, locant_str = token.partition("@")
+        try:
+            if sep:  # <label>@<locant> (a labelled port, for swap)
+                placements.append((int(label_str) if label_str else 0, int(locant_str)))
+            else:  # bare <locant> (a single unlabelled port, for grow)
+                placements.append((0, int(label_str)))
+        except ValueError:
+            raise ValueError(
+                f"bad port placement {token!r}; use <label>@<locant> (swap) or "
+                f"<locant> (grow)"
+            ) from None
+    if not placements:
+        raise ValueError(
+            f"{name} needs port placements: 'swap <id> {name} <label>@<locant> ...' "
+            f"(labels are the group's ports from describe_group), or "
+            f"'grow <id> <pos> {name} <locant>'"
+        )
+    return build_ported_ring(name, placements)
 
 
 def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:

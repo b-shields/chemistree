@@ -69,31 +69,28 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
     def swap(node_id: int, group: str) -> str:
         """Replace the whole group at ``node_id`` with a new group.
 
-        The group is a common name ('trifluoromethyl') or a SMILES with one dummy
-        ``[*]`` per attachment point ('[*]C1([*])COC1' for a 2-port oxetane
-        linker); if a name is not recognized, pass a SMILES.
+        Two ways to name the new group:
 
-        The new group must have the same number of ports as the group it replaces.
-        Use the group's own port labels (from ``describe_group``) so each
-        attachment keeps its place — bare ``[*]`` dummies are assigned in atom
-        order and can put substituents in the wrong spots. To change a group and
-        drop a substituent, ``remove`` that substituent leaf first (freeing its
-        port), then swap the lower-port group. A port-count error names the ports
-        and how to proceed. To place a port on a ring atom, branch it:
-        ``Cc1nc([1*])nc2ccccc12`` puts ``[1*]`` on the quinazoline 2-position (the
-        carbon between the two ring nitrogens).
+        - A vendored ring by NAME with a port locant for each of the group's ports:
+          ``quinazoline 3@2 4@6`` puts port ``[3*]`` on the ring's 2-position and
+          ``[4*]`` on the 6-position (IUPAC numbering). Prefer this for any named
+          heterocycle — no ring SMILES to write, and an unknown name or a locant with
+          no free valence errors with the valid options.
+        - A common name (``trifluoromethyl``) or a SMILES with one dummy ``[*]`` per
+          attachment point — the general form for a ring not in the table or a custom
+          group. To place a port on a ring atom, branch it: ``[3*]c1ncc2cc([4*])ccc2n1``
+          is a quinazoline with ports on its 2- and 6-positions.
 
-        When users ask to add a heterocycle they will typically use canonical
-        numbering (atomic number priority around the ring) to refer to the H
-        position(s) that should carry a port. Examples: (A) "add a 2-oxazole"
-        means `c1cnc([*])o1`. (B) Suppose there is a benzene with 2 ports
-        (`c1([1*])cc([2*])ccc1`) where `[1*]F` and `[2*]C` are attached groups;
-        then if a user says "swap the F, Me phenyl to a 2,5 thiazole" it means
-        `c1([2*])cnc([1*])s1`.
+        Either way, use the group's own port labels (from ``describe_group``) so each
+        attachment keeps its place — bare ``[*]`` dummies are assigned in atom order and
+        can put substituents in the wrong spots. To change a group and drop a
+        substituent, ``remove`` that substituent leaf first (freeing its port), then
+        swap the lower-port group. A port-count error names the ports and next steps.
 
         Args:
             node_id: Group whose fragment is replaced (from ``describe``).
-            group: A common group name or a SMILES with a ``[*]`` per port.
+            group: A vendored ring name with ``<label>@<locant>`` placements, a common
+                group name, or a SMILES with a ``[*]`` per port.
         """
         return backend.run(f"swap {node_id} {group}", with_state=backend.prime)
 
@@ -101,14 +98,17 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
     def grow(node_id: int, position_id: int, group: str) -> str:
         """Grow a group where a hydrogen is, at a specific position.
 
-        Get ``position_id`` from ``describe_group(node_id)`` — it is the id of a
-        hydrogen on the atom you want to grow from (e.g. the hydrogen ortho to a
-        named substituent).
+        Get ``position_id`` from ``describe_group(node_id)`` — the id of a hydrogen on
+        the atom to grow from (e.g. the hydrogen ortho to a named substituent). Name the
+        new group as a vendored ring by NAME with its attachment locant (``pyridine 3``
+        attaches a pyridine through its 3-position), a common name, or a SMILES with one
+        dummy ``[*]`` port.
 
         Args:
             node_id: Group bearing the hydrogen (from ``describe``).
             position_id: Id of the hydrogen to replace (from ``describe_group``).
-            group: A common group name, or a SMILES with one dummy ``[*]`` port.
+            group: A vendored ring name with a ``<locant>``, a common group name, or a
+                SMILES with one ``[*]`` port.
         """
         return backend.run(
             f"grow {node_id} {position_id} {group}", with_state=backend.prime

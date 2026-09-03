@@ -748,3 +748,49 @@ def test_pose_sdf_requires_3d():
     session = DesignSession("CCc1ccccc1", three_d=False)
     with pytest.raises(ValueError, match="3D coordinates"):
         session.pose_sdf()
+
+
+_CORE_HOP_START = "Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)ccc1F"
+_CORE_HOP_GOLD = Chem.CanonSmiles("Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)ccc3n2)ccc1F")
+
+
+def _core_hop_session():
+    """The abl1 ligand with the N-methyl removed, so the scaffold has two open ports."""
+    session = DesignSession(_CORE_HOP_START, three_d=False)
+    session.remove(7)  # the N-methyl leaf on the scaffold, freeing its third port
+    return session
+
+
+def test_swap_by_ring_name_places_ports_at_locants():
+    # The core hop that stumped the hand-SMILES path: name the ring, place each port.
+    session = _core_hop_session()
+    session.swap(
+        0, "quinazoline 3@2 4@6"
+    )  # [3*] aniline at C2, [4*] dichlorophenyl at C6
+    assert session.smiles() == _CORE_HOP_GOLD
+
+
+def test_swap_by_smiles_still_works():
+    # The duality: the same result via a hand-written ported ring SMILES.
+    session = _core_hop_session()
+    session.swap(0, "[3*]c1ncc2cc([4*])ccc2n1")
+    assert session.smiles() == _CORE_HOP_GOLD
+
+
+def test_swap_by_ring_name_rejects_a_ring_nitrogen_locant():
+    session = _core_hop_session()
+    with pytest.raises(ValueError, match="no free valence"):
+        session.swap(0, "quinazoline 3@1 4@6")  # position 1 is a ring nitrogen
+
+
+def test_grow_by_ring_name_matches_the_hand_smiles():
+    # The grow duality: a named ring and its hand-SMILES equivalent grow the same.
+    def grown(group):
+        session = DesignSession("Cc1ccccc1", three_d=False)
+        ring = next(
+            n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+        )
+        session.grow(ring, _aromatic_h_on_ring(session, ring), group)
+        return session.smiles()
+
+    assert grown("pyridine 3") == grown("[*]c1cccnc1")  # both a 3-pyridyl

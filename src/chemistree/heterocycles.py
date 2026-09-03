@@ -313,3 +313,58 @@ def named_ring_locants(mol: Chem.Mol, name: str) -> str | None:
     return (
         None if matched is None else _render_locants(mol, name, matched[0], matched[1])
     )
+
+
+def build_ported_ring(name: str, placements: list[tuple[int, int]]) -> Chem.Mol:
+    """Build a vendored ring as a swap/grow group, ports at chosen IUPAC locants.
+
+    Lets a caller name a ring instead of hand-writing a multi-port fused-ring SMILES:
+    each placement attaches a dummy port to the ring atom at that IUPAC locant.
+
+    Args:
+        name: A vendored, numbered heterocycle name (a key of ``RING_POSITIONS``).
+        placements: ``(port_label, locant)`` pairs. The port is a dummy atom with
+            isotope ``port_label``; a label of 0 is a bare ``[*]`` port (for grow).
+
+    Returns:
+        The ring as a Mol with one dummy port per placement.
+
+    Raises:
+        ValueError: If ``name`` is not a numbered vendored ring, or a locant is
+            absent or not an open (hydrogen-bearing) ring position.
+    """
+    if name not in _NUMBERED_BY_NAME:
+        raise ValueError(
+            f"{name!r} is not a named ring; choose one of: "
+            f"{', '.join(sorted(_NUMBERED_BY_NAME))}"
+        )
+    positions = RING_POSITIONS[name]
+    mol = Chem.RWMol(Chem.MolFromSmiles(HETEROCYCLES[name]))
+    loc_to_idx = {p: i for i, p in enumerate(positions) if p}
+    open_locants = sorted(
+        p
+        for i, p in enumerate(positions)
+        if p and mol.GetAtomWithIdx(i).GetTotalNumHs() > 0
+    )
+    open_text = ", ".join(map(str, open_locants))
+    for label, locant in placements:
+        if locant not in loc_to_idx:
+            raise ValueError(
+                f"{name} has no position {locant}; open positions: {open_text}"
+            )
+        atom = mol.GetAtomWithIdx(loc_to_idx[locant])
+        free_h = atom.GetTotalNumHs()
+        if free_h == 0:
+            raise ValueError(
+                f"{name} position {locant} is a ring {atom.GetSymbol().upper()} with "
+                f"no free valence; ports go on an open position ({open_text})"
+            )
+        dummy = Chem.Atom(0)
+        dummy.SetIsotope(label)
+        dummy_idx = mol.AddAtom(dummy)
+        mol.AddBond(loc_to_idx[locant], dummy_idx, Chem.BondType.SINGLE)
+        atom.SetNumExplicitHs(free_h - 1)
+        atom.SetNoImplicit(True)
+    ring = mol.GetMol()
+    Chem.SanitizeMol(ring)
+    return ring
