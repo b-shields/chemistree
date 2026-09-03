@@ -4,7 +4,8 @@
 #   - 2D editing: all three arms (chemistree / generalist / naked).
 #   - 3D scaffold decoration (guidance x arm) + understanding probes:
 #     chemistree vs generalist only -- naked has no 3D access, so it is dropped.
-# The uniform per-case timeout is overridable via TIMEOUT (default 300s).
+# The per-case timeout is a generous hang-guard (default 600s, override via TIMEOUT);
+# efficiency is measured by cost/tokens, not wall time.
 #
 # Requirements:
 #   - the `chemistree` conda env with `poetry install`
@@ -34,9 +35,12 @@ mkdir -p "$RESULTS_2D" "$RESULTS_3D"
 rm -f "$RESULTS_2D"/*.jsonl "$RESULTS_3D"/*.jsonl
 
 C="$REPO/benchmarks/cases"
-# A uniform per-case timeout. A hard subprocess timeout kills the agent mid-run and
-# yields no FINAL_SMILES, so keep it generous enough for the slow decoration cases.
-TIMEOUT="${TIMEOUT:-300}"
+# A uniform per-case timeout, set generously as a hang-guard only. Model+API round-trips
+# dominate the wall clock (tools run locally in ms), so a tight cap conflates agent
+# efficiency with API latency. A roomy limit lets the latency-independent cost/token
+# metrics drive the efficiency comparison, and a timeout then flags a genuine stall, not
+# a slow API. Override via TIMEOUT.
+TIMEOUT="${TIMEOUT:-600}"
 
 # 2D editing -- all three arms (naked is a valid text baseline from the SMILES).
 for arm in naked generalist chemistree; do

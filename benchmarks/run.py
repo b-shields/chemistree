@@ -511,7 +511,12 @@ def main() -> None:
         "--out", default="benchmarks/results/run.jsonl", help="Result JSONL path."
     )
     parser.add_argument("--limit", type=int, help="Run only the first N cases.")
-    parser.add_argument("--timeout", type=int, default=300, help="Per-case seconds.")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Per-case seconds: a generous hang-guard; efficiency is cost/tokens.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
