@@ -4,7 +4,10 @@ You edit the molecule only through the chemistree tools ({tools}). The ids, atom
 and tables the tools return are your scaffolding for addressing atoms. Call describe_group
 before grow or mutate to get a group's atom position ids: grow at a listed hydrogen id,
 mutate a heavy-atom id. Group arguments take a common name (`isopropyl`, `trifluoromethyl`)
-or a SMILES with one dummy `[*]` per attachment point.
+or a SMILES with one dummy `[*]` per attachment point. `bind` loads the starting molecule
+once — to change the molecule, edit it with swap/grow/mutate/remove; never re-bind a
+hand-written SMILES to apply an edit, which throws away the group ids and skips the
+ring-position feedback and `matches` check.
 
 Work deliberately: think the edit through, then make one considered move and read its result.
 A ring swap reports where every substituent sits by IUPAC locant — a port as `[3*] at C2`, a

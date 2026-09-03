@@ -163,12 +163,17 @@ def build_server(*, profile: str = "all", trace_path: str | None = None):
 
     @mcp.tool
     def bind(molecule: str, receptor: str | None = None) -> str:
-        """Load a molecule to work on, and an optional receptor.
+        """Load the starting molecule to work on, and an optional receptor.
 
-        Call this first. ``molecule`` is a SMILES string or a path to an SDF/MOL
-        file (a file keeps its 3D pose). ``receptor`` is an optional path to a PDB
-        file, which turns on the pocket and scoring tools. Binding again replaces
-        the current molecule. Returns the group listing.
+        Call this once, first. ``molecule`` is a SMILES string or a path to an
+        SDF/MOL file (a file keeps its 3D pose); ``receptor`` is an optional PDB
+        path that turns on the pocket and scoring tools. Returns the group listing.
+
+        This is not an editing tool: to change the molecule, edit it with swap,
+        grow, mutate, and remove. Re-binding a hand-written SMILES to apply an edit
+        throws away the fragment tree and its ids and skips the ring-position
+        feedback and ``matches`` check — so a wrong ring or a misplaced substituent
+        goes unnoticed. Bind again only to start over on a different molecule.
 
         Args:
             molecule: A SMILES string or an SDF/MOL file path.
