@@ -99,10 +99,11 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         """Grow a group where a hydrogen is, at a specific position.
 
         Get ``position_id`` from ``describe_group(node_id)`` — the id of a hydrogen on
-        the atom to grow from (e.g. the hydrogen ortho to a named substituent). Name the
+        the atom to grow from (e.g. the hydrogen ortho to a named substituent). Give the
         new group as a vendored ring by NAME with its attachment locant (``pyridine 3``
-        attaches a pyridine through its 3-position), a common name, or a SMILES with one
-        dummy ``[*]`` port.
+        attaches a pyridine through its 3-position), a common name (``cyclopropyl``), or
+        a SMILES with one dummy ``[*]`` port (``[*]c1cccnc1`` is that same 3-pyridyl
+        written by hand).
 
         Args:
             node_id: Group bearing the hydrogen (from ``describe``).

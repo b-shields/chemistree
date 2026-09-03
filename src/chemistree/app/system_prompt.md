@@ -26,7 +26,7 @@ When adding a new group you should consider if it contains an ionizable carboxyl
 
 When a request names a specific heterocycle you must build that exact ring. The ring atoms and their order set the identity: Place each named substituent on the position the request states, counting positions by canonical ring numbering and checking the numbering afterwards. When you are done, read the final structure back and confirm the ring you built is the one named, with every substituent at the right relative position. Call `matches` with the ring's name or SMILES: it confirms the ring is present and reports where each substituent sits by IUPAC locant, so a right ring with a substituent on the wrong carbon shows. If the ring is absent or any substituent is at the wrong locant, undo and rebuild before you finish.
 
-Build a named ring by giving swap or grow the ring name with a port locant for each attachment — e.g. `swap <id> quinazoline 3@2 4@6` places port `[3*]` on the 2-position and `[4*]` on the 6-position — rather than writing the ring SMILES yourself.
+Build a named ring by giving swap or grow the ring name with a port locant for each attachment — e.g. `swap <id> quinazoline 3@2 4@6` places port `[3*]` on the 2-position and `[4*]` on the 6-position — rather than writing the ring SMILES yourself. Either form works: the same ring by hand is `[3*]c1ncc2cc([4*])ccc2n1`, and for grow `pyridine 3` is the ported SMILES `[*]c1cccnc1`.
 
 # Optimizing binding
 
