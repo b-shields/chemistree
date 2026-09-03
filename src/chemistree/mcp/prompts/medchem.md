@@ -36,44 +36,6 @@ is the one named, with every substituent at the right position — the ring iden
 locant. If the ring is wrong, or any substituent sits at the wrong position, fix it before you
 finish.
 
-Example heteroaromatics, each as its parent ring (canonical SMILES). Attach and substitute
-by canonical ring numbering:
-- furan: `c1ccoc1`
-- thiophene: `c1ccsc1`
-- pyrrole: `c1cc[nH]c1`
-- pyrazole: `c1cn[nH]c1`
-- imidazole: `c1c[nH]cn1`
-- isoxazole: `c1cnoc1`
-- oxazole: `c1cocn1`
-- isothiazole: `c1cnsc1`
-- thiazole: `c1cscn1`
-- 1,2,3-triazole: `c1cn[nH]n1`
-- 1,2,4-triazole: `c1nc[nH]n1`
-- tetrazole: `c1nn[nH]n1`
-- 1,2,4-oxadiazole: `c1ncon1`
-- 1,3,4-oxadiazole: `c1nnco1`
-- 1,3,4-thiadiazole: `c1nncs1`
-- pyridine: `c1ccncc1`
-- pyridazine: `c1ccnnc1`
-- pyrimidine: `c1cncnc1`
-- pyrazine: `c1cnccn1`
-- 1,3,5-triazine: `c1ncncn1`
-- indole: `c1ccc2[nH]ccc2c1`
-- indazole: `c1ccc2[nH]ncc2c1`
-- benzimidazole: `c1ccc2[nH]cnc2c1`
-- benzofuran: `c1ccc2occc2c1`
-- benzothiophene: `c1ccc2sccc2c1`
-- benzoxazole: `c1ccc2ocnc2c1`
-- benzothiazole: `c1ccc2scnc2c1`
-- 7-azaindole: `c1cnc2[nH]ccc2c1`
-- purine: `c1ncc2[nH]cnc2n1`
-- pyrrolotriazine (pyrrolo[2,1-f][1,2,4]triazine): `c1cc2cncnn2c1`
-- quinoline: `c1ccc2ncccc2c1`
-- isoquinoline: `c1ccc2cnccc2c1`
-- quinazoline: `c1ccc2ncncc2c1`
-- quinoxaline: `c1ccc2nccnc2c1`
-- 1,8-naphthyridine: `c1cnc2ncccc2c1`
-
 # How to optimize
 
 Work autonomously: make a run of edits without pausing, and report at the end what you tried
