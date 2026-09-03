@@ -33,7 +33,9 @@ atoms and their order set the identity: Place each named substituent on the posi
 states, counting positions by canonical ring numbering and checking the numbering afterwards.
 When you are done, read the final structure back and confirm the ring you built is the one named,
 with every substituent at the right relative position. Call `matches` with the ring's name or
-SMILES to confirm the ring is present; if it does not match, undo and rebuild before you finish.
+SMILES: it confirms the ring is present and reports where each substituent sits by IUPAC locant,
+so a right ring with a substituent on the wrong carbon shows. If the ring is absent or any
+substituent is at the wrong locant, undo and rebuild before you finish.
 
 Example heteroaromatics, each as its parent ring (canonical SMILES). Attach and substitute
 by canonical ring numbering:

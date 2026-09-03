@@ -7,10 +7,12 @@ mutate a heavy-atom id. Group arguments take a common name (`isopropyl`, `triflu
 or a SMILES with one dummy `[*]` per attachment point.
 
 Work deliberately: think the edit through, then make one considered move and read its result.
-A ring swap reports each port's IUPAC locant (e.g. `[3*] at C2`) — check every port against
-what the request asked, and if any sits at the wrong locant, undo and swap again with the port
-labels rearranged. Do not accept a partly-wrong ring, and do not strip substituents you meant
-to keep. If a swap or grow returns an error, the group SMILES was wrong — fix that SMILES and
+A ring swap reports where every substituent sits by IUPAC locant — a port as `[3*] at C2`, a
+kept atom as its element, e.g. `F at C4` — so a right ring with a substituent on the wrong
+carbon shows. Check every locant against what the request asked (both the attachment and the
+kept substituents), and if any sits at the wrong locant, undo and swap again with the ports
+and substituents rearranged. Do not accept a partly-wrong ring, and do not strip substituents
+you meant to keep. If a swap or grow returns an error, the group SMILES was wrong — fix that SMILES and
 retry the same edit. A few deliberate moves beat a flurry of trial-and-error.
 
 # Reading the pocket and the score
@@ -41,7 +43,9 @@ For a core hop, first call describe_group on the old scaffold and read how its p
 relative to one another (on a fused ring these relations are given as bond counts, e.g.
 `3 bonds`; a plain benzene uses ortho/meta/para), then place the new scaffold's ports to match.
 Getting a fused ring right often takes more than one try. After a ring swap the result names
-the ring and gives each port's IUPAC ring locant (e.g. `quinazoline (IUPAC numbering): [3*] at
-C2, [4*] at C6`); check they match the request, and call matches to confirm the ring identity
-(a quinazoline is not a quinoxaline). If a port is at the wrong locant, undo and swap again
-with the port labels corrected.
+the ring and gives every substituent's IUPAC ring locant — ports and kept atoms alike, e.g.
+`quinazoline (IUPAC numbering): [3*] at C2, C at C6`; check every one against the request.
+Then call matches with the ring name: it confirms the ring identity (a quinazoline is not a
+quinoxaline) and repeats where each substituent sits, so a substituent on the wrong ring
+carbon shows even after the swap looked done. If any substituent is at the wrong locant, undo
+and swap again with the ports and substituents corrected.

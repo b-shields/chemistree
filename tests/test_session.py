@@ -475,6 +475,15 @@ def test_matches_rejects_an_unparseable_pattern():
         session.matches("$$$ not a pattern")
 
 
+def test_matches_reports_where_each_substituent_sits_on_a_named_ring():
+    # The agent's wrong oxazole from the abl1 case: right ring, methyl and F flipped.
+    # matches confirms the ring AND shows the flipped locants (F at C5, not C4).
+    agent = "Cc1nc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)oc1F"
+    report = DesignSession(agent, three_d=False).matches("oxazole")
+    assert "Substituent positions" in report
+    assert "C at C4" in report and "F at C5" in report  # the flip is visible
+
+
 def test_swap_result_reports_ring_positions_of_the_new_ports():
     from chemistree.commands import run_command
 

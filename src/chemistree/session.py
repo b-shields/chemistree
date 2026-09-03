@@ -30,8 +30,9 @@ from chemistree.heterocycles import (
     HETEROCYCLES,
     heterocycle_name,
     heterocycle_smiles,
+    named_ring_locants,
     number_ring_system,
-    ring_ports_summary,
+    ring_locant_summary,
 )
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
@@ -482,7 +483,13 @@ class DesignSession:
             for node in self.tree.nodes
             if node.id is not None and node.current.mol.HasSubstructMatch(query)
         ]
-        return _matches_report(pattern, name, whole, group_hits)
+        # Where each substituent sits, so a right ring with a wrong substituent shows.
+        locants = (
+            named_ring_locants(self.molecule(), name)
+            if name is not None and whole > 0
+            else None
+        )
+        return _matches_report(pattern, name, whole, group_hits, locants)
 
     def ring_change_note(self, before: Chem.Mol, after: Chem.Mol) -> str:
         """A note on a ring edit: the vendored ring and its ports' canonical positions.
@@ -506,10 +513,10 @@ class DesignSession:
         # Only name the previous ring when it was itself an exact vendored ring (not a
         # sub-ring of a larger fused system), and it differs from the new one.
         if was is not None and _exact_ring(before, was) and was[0] != now[0]:
-            return (
-                f"; {ring_ports_summary(before)} changed to {ring_ports_summary(after)}"
-            )
-        return f"; {ring_ports_summary(after)}"
+            old_note = ring_locant_summary(before)
+            new_note = ring_locant_summary(after)
+            return f"; {old_note} changed to {new_note}"
+        return f"; {ring_locant_summary(after)}"
 
     def minimize(
         self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
@@ -1082,9 +1089,23 @@ def _exact_ring(mol: Chem.Mol, numbered: tuple[str, dict[int, int]] | None) -> b
 
 
 def _matches_report(
-    pattern: str, name: str | None, whole: int, group_hits: list[tuple[int, str]]
+    pattern: str,
+    name: str | None,
+    whole: int,
+    group_hits: list[tuple[int, str]],
+    locants: str | None = None,
 ) -> str:
-    """Render the substructure-search report; ``name`` labels a known ring."""
+    """Render the substructure-search report; ``name`` labels a known ring.
+
+    Args:
+        pattern: The query as the caller wrote it.
+        name: The heterocycle name, when the pattern is a known ring.
+        whole: Number of whole-molecule matches.
+        group_hits: ``(group_id, label)`` for each group that contains the pattern.
+        locants: For a matched named ring, where each substituent sits by IUPAC
+            locant (from ``named_ring_locants``); appended so a right ring with a
+            substituent on the wrong carbon is visible. None when not a named ring.
+    """
     header = f"# Substructure `{pattern}`"
     if name:
         header += f" ({name})"
@@ -1098,6 +1119,8 @@ def _matches_report(
         lines.append(f"Contained in group(s): {groups}.")
     else:
         lines.append("Not contained in any single group.")
+    if locants:
+        lines.append(f"Substituent positions: {locants}")
     return "\n".join(lines)
 
 

@@ -139,6 +139,9 @@ _NUMBERED_QUERIES = sorted(
     ),
     key=lambda item: -item[1].GetNumAtoms(),
 )
+_NUMBERED_BY_NAME = {
+    name: (query, positions) for name, query, positions in _NUMBERED_QUERIES
+}
 
 
 def _substituents(atom: Chem.Atom, ring: set[int]) -> list[int]:
@@ -146,14 +149,70 @@ def _substituents(atom: Chem.Atom, ring: set[int]) -> list[int]:
     return [n.GetAtomicNum() for n in atom.GetNeighbors() if n.GetIdx() not in ring]
 
 
+def _match_ring(
+    mol: Chem.Mol, query: Chem.Mol, positions: tuple[int, ...]
+) -> tuple[dict[int, int], frozenset[int]] | None:
+    """Best match of one vendored ring in ``mol``.
+
+    Among the ring's symmetry-equivalent matches, chooses the one giving the
+    substituent-bearing atoms the lowest locants (the IUPAC rule), breaking a remaining
+    tie by substituent atomic number so the numbering is stable across SMILES forms.
+
+    Args:
+        mol: The molecule (or group fragment) to search.
+        query: The parsed ring template.
+        positions: The template's per-atom IUPAC positions (0 = fusion / unnumbered).
+
+    Returns:
+        ``({atom_idx: position}, all_matched_atom_idxs)`` for the chosen match, or None
+        when the ring is not a substructure of ``mol``. The atom set keeps the
+        position-0 fusion atoms so a caller can tell a ring bond from a substituent.
+    """
+    matches = mol.GetSubstructMatches(query, uniquify=False)
+    if not matches:
+        return None
+    chosen: tuple[tuple[tuple[int, ...], tuple[int, ...]], tuple[int, ...]] | None
+    chosen = None
+    for match in matches:
+        ring = set(match)
+        placed = sorted(
+            (positions[qi], min(subs))
+            for qi, mi in enumerate(match)
+            if positions[qi]
+            for subs in [_substituents(mol.GetAtomWithIdx(mi), ring)]
+            if subs
+        )
+        # lowest locants first, then lowest substituent atomic numbers by position
+        key = (tuple(p for p, _ in placed), tuple(z for _, z in placed))
+        if chosen is None or key < chosen[0]:
+            chosen = (key, match)
+    assert chosen is not None
+    numbering = {
+        chosen[1][qi]: positions[qi]
+        for qi in range(query.GetNumAtoms())
+        if positions[qi]
+    }
+    return numbering, frozenset(chosen[1])
+
+
+def _best_ring(mol: Chem.Mol) -> tuple[str, dict[int, int], frozenset[int]] | None:
+    """The largest vendored ring in ``mol``: (name, numbering, ring atoms), or None."""
+    best: tuple[int, str, dict[int, int], frozenset[int]] | None = None
+    for name, query, positions in _NUMBERED_QUERIES:
+        matched = _match_ring(mol, query, positions)
+        if matched is None:
+            continue
+        size = query.GetNumAtoms()
+        if best is None or size > best[0]:
+            best = (size, name, matched[0], matched[1])
+    return None if best is None else (best[1], best[2], best[3])
+
+
 def number_ring_system(mol: Chem.Mol) -> tuple[str, dict[int, int]] | None:
     """Assign IUPAC ring positions to a molecule's atoms from a vendored ring.
 
-    Finds the largest vendored ring that is a substructure of ``mol`` and, among that
-    ring's symmetry-equivalent matches, chooses the one giving the substituent-bearing
-    atoms the lowest locants (the IUPAC rule). A remaining tie on a symmetric ring
-    (e.g. pyridine 2 vs 6) is broken by substituent atomic number, so the numbering is
-    the same regardless of how the SMILES was written.
+    Finds the largest vendored ring that is a substructure of ``mol`` and numbers it by
+    the IUPAC lowest-locants rule (see ``_match_ring``).
 
     Args:
         mol: The molecule (or group fragment) to number.
@@ -162,44 +221,65 @@ def number_ring_system(mol: Chem.Mol) -> tuple[str, dict[int, int]] | None:
         ``(ring_name, {atom_idx: position})`` for the matched ring, or None when no
         vendored ring matches (a carbocycle, or a ring not in the table).
     """
-    best: tuple[int, str, dict[int, int]] | None = None
-    for name, query, positions in _NUMBERED_QUERIES:
-        matches = mol.GetSubstructMatches(query, uniquify=False)
-        if not matches:
-            continue
-        chosen: tuple[tuple[tuple[int, ...], tuple[int, ...]], tuple[int, ...]] | None
-        chosen = None
-        for match in matches:
-            ring = set(match)
-            placed = sorted(
-                (positions[qi], min(subs))
-                for qi, mi in enumerate(match)
-                if positions[qi]
-                for subs in [_substituents(mol.GetAtomWithIdx(mi), ring)]
-                if subs
-            )
-            # lowest locants first, then lowest substituent atomic numbers by position
-            key = (tuple(p for p, _ in placed), tuple(z for _, z in placed))
-            if chosen is None or key < chosen[0]:
-                chosen = (key, match)
-        assert chosen is not None
-        numbering = {
-            chosen[1][qi]: positions[qi]
-            for qi in range(query.GetNumAtoms())
-            if positions[qi]
-        }
-        size = query.GetNumAtoms()
-        if best is None or size > best[0]:
-            best = (size, name, numbering)
-    return (best[1], best[2]) if best else None
+    ring = _best_ring(mol)
+    return None if ring is None else (ring[0], ring[1])
 
 
-def ring_ports_summary(mol: Chem.Mol) -> str | None:
-    """Name a fragment's ring and give each port's IUPAC locant.
+def _render_locants(
+    mol: Chem.Mol, name: str, numbering: dict[int, int], ring: frozenset[int]
+) -> str:
+    """Render a ring's substituent map from a numbering and its full atom set.
 
-    Locants use the chemist's ``C2`` / ``N1`` form (the ring atom's element plus its
-    number), not the word "position" — which the tools already use for the atom-index
-    ``position_id`` of grow/mutate. The ring is qualified with "IUPAC numbering" once.
+    Each numbered position that bears a substituent is listed by IUPAC locant — a port
+    as ``[k*] at Cn`` (dummy atom, by isotope), a heavy substituent as its element ``F
+    at Cn`` — and each open position (an H-bearing ring atom with no substituent) is
+    listed after. Locants use the chemist's ``C2`` / ``N1`` form, not the word
+    "position" (which the tools use for the atom-index ``position_id`` of grow/mutate).
+
+    Args:
+        mol: The molecule or fragment the numbering came from.
+        name: The ring name.
+        numbering: ``{atom_idx: position}`` (position-0 fusion atoms omitted).
+        ring: All of the ring's atom indices, fusion atoms included.
+
+    Returns:
+        e.g. ``"quinazoline (IUPAC numbering): N at C2, C at C6 (open: C4, C5, C7,
+        C8)"``.
+    """
+
+    def locant(atom_idx: int) -> str:
+        return f"{mol.GetAtomWithIdx(atom_idx).GetSymbol()}{numbering[atom_idx]}"
+
+    items: list[tuple[int, str]] = []
+    open_atoms: list[tuple[int, int]] = []
+    for idx, pos in numbering.items():
+        atom = mol.GetAtomWithIdx(idx)
+        ext = [n for n in atom.GetNeighbors() if n.GetIdx() not in ring]
+        ports = [n for n in ext if n.GetAtomicNum() == 0]
+        heavy = [n for n in ext if n.GetAtomicNum() > 1]
+        if ports or heavy:
+            for port in ports:
+                items.append((pos, f"[{port.GetIsotope()}*] at {locant(idx)}"))
+            for sub in heavy:
+                items.append((pos, f"{sub.GetSymbol()} at {locant(idx)}"))
+        elif atom.GetTotalNumHs() > 0 or any(n.GetAtomicNum() == 1 for n in ext):
+            open_atoms.append((pos, idx))
+    items.sort()
+    open_atoms.sort()
+    text = f"{name} (IUPAC numbering)"
+    if items:
+        text += ": " + ", ".join(item for _, item in items)
+    if open_atoms:
+        text += " (open: " + ", ".join(locant(idx) for _, idx in open_atoms) + ")"
+    return text
+
+
+def ring_locant_summary(mol: Chem.Mol) -> str | None:
+    """Name a fragment's largest vendored ring and place every substituent by locant.
+
+    Reports each port and each baked-in heavy substituent by IUPAC locant, plus the open
+    positions — so a ring edit can be checked for both ring identity and where each
+    substituent sits.
 
     Args:
         mol: A group fragment (ports are dummy atoms) posed however.
@@ -208,32 +288,28 @@ def ring_ports_summary(mol: Chem.Mol) -> str | None:
         e.g. ``"quinazoline (IUPAC numbering): [3*] at C2, [4*] at C6 (open: C4, C5,
         C7, C8)"``, or None when the fragment is not a vendored ring.
     """
-    numbered = number_ring_system(mol)
-    if numbered is None:
+    ring = _best_ring(mol)
+    return None if ring is None else _render_locants(mol, *ring)
+
+
+def named_ring_locants(mol: Chem.Mol, name: str) -> str | None:
+    """Place the substituents of one named ring where it sits in ``mol``.
+
+    Like ``ring_locant_summary`` but pinned to the named ring (not the largest ring
+    present), so a match against the ring a request named reports where each substituent
+    landed — the check that catches a right ring with a substituent on the wrong carbon.
+
+    Args:
+        mol: The whole molecule (or fragment) to number.
+        name: A vendored ring name.
+
+    Returns:
+        The locant summary, or None when ``name`` is not vendored or the ring is absent.
+    """
+    entry = _NUMBERED_BY_NAME.get(name)
+    if entry is None:
         return None
-    name, positions = numbered
-
-    def locant(atom_idx: int) -> str:
-        return f"{mol.GetAtomWithIdx(atom_idx).GetSymbol()}{positions[atom_idx]}"
-
-    ports = sorted(
-        (atom.GetIsotope(), atom.GetNeighbors()[0].GetIdx())
-        for atom in mol.GetAtoms()
-        if atom.GetAtomicNum() == 0
-        and atom.GetNeighbors()
-        and positions.get(atom.GetNeighbors()[0].GetIdx())
+    matched = _match_ring(mol, *entry)
+    return (
+        None if matched is None else _render_locants(mol, name, matched[0], matched[1])
     )
-    taken = {idx for _, idx in ports}
-    open_atoms = sorted(
-        (positions[a.GetIdx()], a.GetIdx())
-        for a in mol.GetAtoms()
-        if positions.get(a.GetIdx())
-        and a.GetIdx() not in taken
-        and a.GetTotalNumHs() > 0
-    )
-    text = f"{name} (IUPAC numbering)"
-    if ports:
-        text += ": " + ", ".join(f"[{label}*] at {locant(idx)}" for label, idx in ports)
-    if open_atoms:
-        text += " (open: " + ", ".join(locant(idx) for _, idx in open_atoms) + ")"
-    return text

@@ -10,7 +10,9 @@ from chemistree.heterocycles import (
     RING_POSITIONS,
     heterocycle_name,
     heterocycle_smiles,
+    named_ring_locants,
     number_ring_system,
+    ring_locant_summary,
 )
 
 _MEDCHEM = pathlib.Path("src/chemistree/mcp/prompts/medchem.md")
@@ -134,3 +136,46 @@ def test_number_ring_system_breaks_symmetric_ties_deterministically():
 
     assert halogen_positions("Fc1cccc(Cl)n1") == halogen_positions("Clc1cccc(F)n1")
     assert halogen_positions("Fc1cccc(Cl)n1") == {"F": 2, "Cl": 6}
+
+
+# Ground-truth: the exact gold vs agent SMILES from the two abl1 2D failures the
+# substituent-locant report was built to catch (a right ring, a wrong substituent).
+_OXAZOLE_GOLD = "Cc1oc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)nc1F"
+_OXAZOLE_AGENT = "Cc1nc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)oc1F"
+_QUINAZOLINE_GOLD = "Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)ccc3n2)ccc1F"
+_QUINAZOLINE_AGENT = "Cc1cc(Nc2nc(-c3c(Cl)cccc3Cl)c3ccccc3n2)ccc1F"
+
+
+def test_named_ring_locants_places_oxazole_substituents():
+    gold = named_ring_locants(Chem.MolFromSmiles(_OXAZOLE_GOLD), "oxazole")
+    agent = named_ring_locants(Chem.MolFromSmiles(_OXAZOLE_AGENT), "oxazole")
+    # gold: methyl (C) at 5, F at 4; agent flips them — both attach the aniline N at 2
+    assert "N at C2" in gold and "F at C4" in gold and "C at C5" in gold
+    assert "C at C4" in agent and "F at C5" in agent
+    assert gold != agent
+
+
+def test_named_ring_locants_places_quinazoline_on_the_right_ring():
+    gold = named_ring_locants(Chem.MolFromSmiles(_QUINAZOLINE_GOLD), "quinazoline")
+    agent = named_ring_locants(Chem.MolFromSmiles(_QUINAZOLINE_AGENT), "quinazoline")
+    # the dichlorophenyl belongs on the benzo ring at C6, not the pyrimidine ring at C4
+    assert "C at C6" in gold
+    assert "C at C4" in agent and "C at C6" not in agent
+
+
+def test_named_ring_locants_none_when_absent_or_unvendored():
+    benzene = Chem.MolFromSmiles("c1ccccc1")
+    assert named_ring_locants(benzene, "oxazole") is None  # ring not present
+    assert named_ring_locants(benzene, "benzene") is None  # name not vendored
+
+
+def test_ring_locant_summary_reports_a_port_and_a_baked_substituent():
+    # a 2-oxazolyl fragment: the attachment is a port, methyl and F are kept atoms
+    summary = ring_locant_summary(Chem.MolFromSmiles("Cc1oc([3*])nc1F"))
+    assert summary is not None
+    assert "[3*] at C2" in summary  # the port
+    assert "F at C4" in summary and "C at C5" in summary  # the baked substituents
+
+
+def test_ring_locant_summary_none_for_a_carbocycle():
+    assert ring_locant_summary(Chem.MolFromSmiles("c1ccccc1")) is None
