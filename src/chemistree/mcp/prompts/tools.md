@@ -6,7 +6,12 @@ before grow or mutate to get a group's atom position ids: grow at a listed hydro
 mutate a heavy-atom id. Group arguments take a common name (`isopropyl`, `trifluoromethyl`),
 a named heteroaromatic ring with a port locant for each attachment (`quinazoline 3@2 4@6`
 for swap, `pyridine 3` for grow — no ring SMILES to write), or a SMILES with one dummy `[*]`
-per attachment point. `bind` loads the starting molecule
+per attachment point. Write every group in its neutral form, as the structure is drawn on
+paper: the edit is scored against a neutral canonical structure, so a formal charge or an
+extra proton makes it mismatch even when the heavy atoms are right. A primary amine is `N`
+(`[NH2]`), never the protonated `[NH3+]`; a carboxylic acid is `C(=O)O`, not the carboxylate
+`C(=O)[O-]`. Do not add a charge for the physiological protonation state. `bind` loads the
+starting molecule
 once — to change the molecule, edit it with swap/grow/mutate/remove; never re-bind a
 hand-written SMILES to apply an edit, which throws away the group ids and skips the
 ring-position feedback and `matches` check.
