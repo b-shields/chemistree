@@ -75,3 +75,10 @@ attachment isomer for you. Write the group SMILES by hand and pick the isomer yo
 `[*]c1ccc2ccccc2c1`; a **1-naphthyl** (α; the attachment carbon sits next to a fusion carbon)
 is `[*]c1cccc2ccccc12`. Read the fused SMILES back atom by atom before you finish, since no
 locant check will flag a wrong isomer.
+
+A **tetrazole** carboxyl bioisostere has two NH tautomers, and the numbered-ring build
+(`tetrazole 5`) gives the **2H** form, `[*]c1nn[nH]n1`. The conventional acidic
+5-substituted bioisostere — the form a carboxyl→tetrazole replacement is scored against — is
+**1H-tetrazol-5-yl**, `[*]c1nnn[nH]1`, where the NH sits next to the attachment carbon.
+Hand-write that 1H SMILES for the swap rather than taking the built 2H ring; the NH position
+is not flagged by any locant check.
