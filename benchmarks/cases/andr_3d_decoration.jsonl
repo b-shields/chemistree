@@ -1,0 +1,1 @@
+{"id": "andr", "target": "benchmarks/data/andr/reference.sdf", "receptor": "benchmarks/data/andr/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

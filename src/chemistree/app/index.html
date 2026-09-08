@@ -140,7 +140,13 @@
       <div class="trace" id="trace"></div>
     </div>
     <div class="panel p3d">
-      <div class="panel-head"><span>3D pocket</span></div>
+      <div class="panel-head">
+        <span>3D pocket</span>
+        <span class="acts">
+          <button class="icon" id="saveSdf" aria-label="save pose as SDF"
+            data-tip="save pose (SDF)">&#10515;</button>
+        </span>
+      </div>
       <div id="mol3d"></div>
     </div>
   </div>
@@ -161,6 +167,7 @@
   <script>
     const viewer = $3Dmol.createViewer("mol3d", { backgroundColor: "#0d0d0d" });
     let ligand = null, receptor = null, latest = null, shownSmiles = null;
+    let shownMolblock = null;  // the 3D pose on screen, for the Save button
     // Light-gray carbons with standard element colors, for the pocket residues.
     const elementBase =
       $3Dmol.elementColors.Jmol || $3Dmol.elementColors.defaultColors;
@@ -201,6 +208,7 @@
       viewer.zoomTo({ model: ligand.getID() });
       viewer.render();
       shownSmiles = art.smiles;
+      shownMolblock = art.molblock;
       markCurrent();
     }
 
@@ -291,6 +299,20 @@
     });
     document.getElementById("copyTrace").addEventListener("click", (e) => {
       if (latest) copyText(traceCsv(latest.trace || []), e.currentTarget);
+    });
+    // Save the 3D pose on screen as an SDF download (a MOL block plus terminator).
+    function saveSdf(molblock, btn) {
+      const sdf = molblock.replace(/\n?$/, "\n") + "$$$$\n";
+      const url = URL.createObjectURL(new Blob([sdf], { type: "chemical/x-mdl-sdfile" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = "pose.sdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      btn.classList.add("flash");
+      setTimeout(() => btn.classList.remove("flash"), 600);
+    }
+    document.getElementById("saveSdf").addEventListener("click", (e) => {
+      if (shownMolblock) saveSdf(shownMolblock, e.currentTarget);
     });
 
     const receptorReady = loadReceptor();

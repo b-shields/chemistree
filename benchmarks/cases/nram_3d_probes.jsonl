@@ -1,0 +1,2 @@
+{"id": "probe-1-count", "ligand": "benchmarks/data/nram/reference.sdf", "receptor": "benchmarks/data/nram/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's carboxylic acid?", "answer": "4"}
+{"id": "probe-2-count_name", "ligand": "benchmarks/data/nram/reference.sdf", "receptor": "benchmarks/data/nram/receptor.pdb", "question": "How many arginine residues have any atom within 4.0 Angstrom of the ligand's carboxylic acid?", "answer": "3"}

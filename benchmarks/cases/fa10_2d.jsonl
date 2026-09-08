@@ -1,0 +1,2 @@
+{"id": "sub-bromo", "category": "substitution", "instruction": "Replace the chlorine on the naphthalene with a bromine.", "gold": "O=C(C(O)CS(=O)(=O)c1ccc2cc(Br)ccc2c1)N1CCC(N2CCCNC2=O)CC1", "smiles": "O=C(C(O)CS(=O)(=O)c1ccc2cc(Cl)ccc2c1)N1CCC(N2CCCNC2=O)CC1"}
+{"id": "sub-nmethyl", "category": "substitution", "instruction": "N-methylate the lactam N-H of the diazepanone ring.", "gold": "CN1CCCN(C2CCN(C(=O)C(O)CS(=O)(=O)c3ccc4cc(Cl)ccc4c3)CC2)C1=O", "smiles": "O=C(C(O)CS(=O)(=O)c1ccc2cc(Cl)ccc2c1)N1CCC(N2CCCNC2=O)CC1"}

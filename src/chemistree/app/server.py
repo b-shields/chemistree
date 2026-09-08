@@ -15,8 +15,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from chemistree.app import state, voice
 from chemistree.app.chat import chat_session
-from chemistree.app.commands import run_command
 from chemistree.app.render import render_molecule, render_state
+from chemistree.commands import run_command
 
 app = FastAPI()
 _PAGE = (Path(__file__).parent / "index.html").read_text()

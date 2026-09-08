@@ -35,7 +35,8 @@ chemistree tests/data/abl1/reference.sdf --receptor tests/data/abl1/receptor.pdb
 
 Open the page to see the ligand in 2D and 3D inside the receptor pocket. With a receptor
 loaded, the 3D view shows binding-site residues within 6 Å of the ligand as labeled lines
-over the ribbon.
+over the ribbon. The 3D panel has a **Save (SDF)** button that downloads the pose on
+screen; the 2D panel copies the SMILES or the edit trace.
 
 Flags:
 
@@ -59,12 +60,17 @@ The MCP tools run against the live session, so every edit updates the 2D and 3D 
 real time:
 
 - **Inspect** — `describe` (the group listing), `describe_group` (one group's atom
-  positions and ring neighbourhood), `smiles`.
+  positions and ring neighbourhood), `smiles`, `matches` (search the molecule for a
+  substructure by heterocycle name or SMILES/SMARTS — a check-your-work tool).
 - **Edit** — `swap` (replace a group), `grow` (add a group at a hydrogen), `mutate`
-  (change one atom's element), `remove` (delete a leaf), `undo`.
+  (change one atom's element), `remove` (delete a leaf), `undo`. After a ring-changing
+  edit the result names the resulting ring and each attachment's IUPAC locant, e.g.
+  `quinazoline (IUPAC numbering): [3*] at C2, [4*] at C6`.
 - **3D / pocket** — `distance` (each group's distance to a residue), `contacts` (map the
-  binding site), `clashes` (report steric overlaps), `minimize` (settle a group about its
-  attachment bond to its best-scoring rotamer by the full Vinardo energy).
+  binding site), `residues_near` (the residues a chosen group or atom contacts),
+  `clashes` (report steric overlaps), `minimize` (settle a group about its attachment
+  bond to its best-scoring rotamer by the full Vinardo energy), `write_pose` (save the
+  current 3D pose to an SDF).
 
 The group listing ends with a physicochemical profile (MW, cLogP, TPSA, H-bond
 donors/acceptors, rotatable bonds, aromatic rings, Fsp3, charge), a structure-alert line
@@ -76,7 +82,27 @@ point (`[*]C(F)(F)F`).
 The chat panel has a reasoning toggle (show/hide the agent's spoken rationale) and a
 button to copy the whole conversation.
 
+## Give any agent chemistree
+
+The same tools ship as a **standalone MCP server** you can add to any Claude Code session —
+no web app needed. It starts empty; the agent calls `bind` to load a molecule (a SMILES or
+an SDF path) and an optional receptor, then edits it with the full tool set in-process:
+
+```bash
+claude mcp add chemistree -- chemistree-mcp
+# then, in the session:
+#   "bind O=C(Nc1ccccc1)c1ccccc1 and swap the left phenyl for a pyridine"
+#   "bind tests/data/abl1/reference.sdf with receptor tests/data/abl1/receptor.pdb, then optimize the affinity"
+```
+
+`bind` keeps an SDF's 3D pose (so you optimize from a real conformer) and embeds one for a
+bare SMILES. Flags: `--tools 2d` registers only the 2D editing tools (no pocket/pose tools)
+for a receptor-free task; `--trace <path.jsonl>` logs one record per tool call.
+
 ## How it works
+
+- `commands.py` — the text-command interpreter over a session, shared by the app and the
+  MCP servers.
 
 - `session.py` — `DesignSession`: the editable molecule. Edits address atoms and groups
   by stable id; undo restores a whole-tree snapshot, so every edit is atomic.
@@ -87,8 +113,13 @@ button to copy the whole conversation.
 - `scoring.py` — the Vinardo function: intermolecular (binding) and intramolecular
   (strain) energy, vendored from cmxflow.
 - `describe.py` / `annotations.py` — the agent-facing group listing and the
-  chemist's-terms atom positions (ortho/meta/para, greek by bond count).
-- `app/` — the FastAPI server, the single-page viewer, and the MCP tool server.
+  chemist's-terms atom positions (ortho/meta/para on a plain benzene ring, plain bond
+  counts elsewhere, each neighbour shown as its `[element:id]` token).
+- `heterocycles.py` — the vendored named heteroaromatic rings (name ⇄ canonical SMILES)
+  and their IUPAC ring numbering, backing `matches` and the ring-position feedback.
+- `mcp/` — the shared MCP tool set (one source of the tool docstrings) and the standalone
+  `chemistree-mcp` server that hosts its own session.
+- `app/` — the FastAPI server, the single-page viewer, and the app's HTTP MCP server.
 
 ## Development
 

@@ -1,0 +1,1 @@
+{"id": "ada", "target": "benchmarks/data/ada/reference.sdf", "receptor": "benchmarks/data/ada/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

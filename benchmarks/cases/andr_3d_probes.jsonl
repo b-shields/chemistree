@@ -1,0 +1,2 @@
+{"id": "probe-1-count", "ligand": "benchmarks/data/andr/reference.sdf", "receptor": "benchmarks/data/andr/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's A-ring ketone oxygen?", "answer": "5"}
+{"id": "probe-2-count", "ligand": "benchmarks/data/andr/reference.sdf", "receptor": "benchmarks/data/andr/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's 17-hydroxyl?", "answer": "3"}

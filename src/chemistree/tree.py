@@ -216,7 +216,7 @@ class FragmentTree:
         """Nodes with at most one edge."""
         return [n for n in self.nodes if len(self.neighbors(n)) <= 1]
 
-    def remove_subtree(self, node: FragmentNode) -> None:
+    def remove_subtree(self, node: FragmentNode) -> tuple[int, int]:
         """Prune a node and its dependent groups, keeping the largest remainder.
 
         Cutting a node splits the tree into one component per edge. The largest
@@ -229,6 +229,11 @@ class FragmentTree:
         Args:
             node: The node to remove, with the smaller side(s) that depend on it.
 
+        Returns:
+            The ``(group_id, position_id)`` of the capped attachment: the kept
+            group and the hydrogen id where the removed group was attached, so it
+            can be replaced with a grow.
+
         Raises:
             ValueError: If it is the only node, so nothing would remain.
         """
@@ -240,13 +245,13 @@ class FragmentTree:
             if len(component) > len(largest):
                 largest = component
         keep = set(largest)
-        capped = False
+        capped_at: tuple[int, int] | None = None
         for edge, other in self.neighbors(node):
             if other in keep:
-                _cap_port(other, edge.label)
-                capped = True
+                assert other.id is not None
+                capped_at = (other.id, _cap_port(other, edge.label))
                 break
-        assert capped  # a non-only node always touches the kept side
+        assert capped_at is not None  # a non-only node always touches the kept side
         removed = {node}
         for component in components:
             if not keep.issuperset(component):
@@ -259,6 +264,7 @@ class FragmentTree:
         for gone in removed:
             if gone.id is not None:
                 self._by_id.pop(gone.id, None)
+        return capped_at
 
     def _components(self, *, without: FragmentNode) -> list[list[FragmentNode]]:
         """Connected components of the tree with one node excluded."""
@@ -328,23 +334,30 @@ def heavy_count(mol: Chem.Mol) -> int:
     return sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1)
 
 
-def _cap_port(node: FragmentNode, label: int) -> None:
-    """Turn a node's dummy port into hydrogen, pushing the capped fragment.
+def _cap_port(node: FragmentNode, label: int) -> int:
+    """Turn a node's dummy port into hydrogen, and return the hydrogen's atom id.
 
     Converting the dummy to H (rather than deleting it) keeps the anchor's
-    valence and the dummy's 3D position. The change is pushed as a new snapshot
-    so it can be reverted like any other edit.
+    valence and the dummy's 3D position, and keeps every atom id stable. The
+    change is pushed as a new snapshot so it can be reverted like any other edit.
 
     Args:
         node: The node whose port is capped.
         label: Isotope label of the dummy port to cap.
+
+    Returns:
+        The atom id of the capped hydrogen (the former port) — a grow position on
+        ``node`` where the removed group was attached.
     """
     mol = Chem.RWMol(node.current.mol)
+    capped_id = -1
     for atom in mol.GetAtoms():
         if atom.GetAtomicNum() == 0 and atom.GetIsotope() == label:
             atom.SetAtomicNum(1)
             atom.SetIsotope(0)
+            capped_id = atom.GetIdx()
             break
     capped = mol.GetMol()
     Chem.SanitizeMol(capped)
     node.push(Fragment(capped))
+    return capped_id

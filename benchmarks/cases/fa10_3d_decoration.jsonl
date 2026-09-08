@@ -1,0 +1,1 @@
+{"id": "fa10", "target": "benchmarks/data/fa10/reference.sdf", "receptor": "benchmarks/data/fa10/receptor.pdb", "instruction": "Optimize the scaffold to improve predicted binding."}

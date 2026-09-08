@@ -1,0 +1,2 @@
+{"id": "core-tetrazole", "category": "core_hopping", "instruction": "Replace the benzoic-acid carboxyl with a tetrazole bioisostere.", "gold": "CCC(CC)Nc1cc(-c2nnn[nH]2)ccc1N1C(=O)CCC1(CO)CO", "smiles": "CCC(CC)Nc1cc(C(=O)O)ccc1N1C(=O)CCC1(CO)CO"}
+{"id": "sub-nmethyl", "category": "substitution", "instruction": "N-methylate the secondary aniline nitrogen.", "gold": "CCC(CC)N(C)c1cc(C(=O)O)ccc1N1C(=O)CCC1(CO)CO", "smiles": "CCC(CC)Nc1cc(C(=O)O)ccc1N1C(=O)CCC1(CO)CO"}

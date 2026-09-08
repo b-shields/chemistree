@@ -1,0 +1,2 @@
+{"id": "probe-1-nearest", "ligand": "benchmarks/data/hivpr/reference.sdf", "receptor": "benchmarks/data/hivpr/receptor.pdb", "question": "Which receptor residue (give its name and number, e.g. ASP381) has an atom closest to the ligand's sulfonyl group?", "answer": "ILE50"}
+{"id": "probe-2-count", "ligand": "benchmarks/data/hivpr/reference.sdf", "receptor": "benchmarks/data/hivpr/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's sulfonyl group?", "answer": "2"}

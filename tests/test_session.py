@@ -402,6 +402,112 @@ def test_contacts_requires_a_receptor():
         session.contacts()
 
 
+def test_residues_near_matches_ground_truth_for_the_chlorines():
+    # residues_near reports every residue within the cutoff of a group -- unlike
+    # contacts, which keeps only the closest atom per residue. So the union over
+    # the two chloro groups is exactly the residues near either chlorine.
+    from chemistree.receptor import min_distance
+
+    session = _abl1_session()
+    receptor = session.receptor
+    chloro = [
+        node
+        for node in session.tree.nodes
+        if any(a.GetSymbol() == "Cl" for a in node.current.mol.GetAtoms())
+    ]
+    cl_coords = np.array(
+        [
+            list(node.current.mol.GetConformer().GetAtomPosition(a.GetIdx()))
+            for node in chloro
+            for a in node.current.mol.GetAtoms()
+            if a.GetSymbol() == "Cl"
+        ]
+    )
+    truth = {
+        f"{r.name}{r.number}"
+        for r in receptor.residues()
+        if min_distance(cl_coords, receptor.residue_positions(r)) <= 4.0
+    }
+    found: set[str] = set()
+    for node in chloro:
+        report = session.residues_near(node.id, cutoff=4.0)
+        found |= set(re.findall(r"[A-Z]{3}\d+", report))
+    assert found == truth
+    assert "ASP149" in found  # the closest Cl contact, a sanity anchor
+
+
+def test_residues_near_requires_a_receptor():
+    session = DesignSession("Cc1ccccc1", three_d=True)
+    with pytest.raises(ValueError, match="receptor"):
+        session.residues_near(0)
+
+
+def test_matches_finds_a_ring_by_name_and_locates_the_group():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)  # phenyl-pyridine
+    report = session.matches("pyridine")
+    assert "pyridine" in report.lower()
+    assert "no match" not in report.lower()
+    pyridine_id = next(
+        n.id
+        for n in session.tree.nodes
+        if any(a.GetSymbol() == "N" for a in n.current.mol.GetAtoms())
+    )
+    assert f"[{pyridine_id}]" in report  # located in the pyridine group
+
+
+def test_matches_reports_no_match_and_names_the_queried_ring():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)
+    report = session.matches("c1ccc2ncncc2c1")  # quinazoline SMILES, reverse-named
+    assert "quinazoline" in report.lower()
+    assert "no match" in report.lower()
+
+
+def test_matches_whole_molecule_but_not_a_single_group():
+    session = DesignSession("c1ccccc1-c1ccncc1", three_d=False)
+    report = session.matches("c1ccccc1-c1ccncc1")  # spans the inter-group bond
+    assert "no match" not in report.lower()  # the whole molecule matches
+    assert "not contained in any single group" in report.lower()
+
+
+def test_matches_rejects_an_unparseable_pattern():
+    session = DesignSession("Cc1ccccc1", three_d=False)
+    with pytest.raises(ValueError):
+        session.matches("$$$ not a pattern")
+
+
+def test_matches_reports_where_each_substituent_sits_on_a_named_ring():
+    # The agent's wrong oxazole from the abl1 case: right ring, methyl and F flipped.
+    # matches confirms the ring AND shows the flipped locants (F at C5, not C4).
+    agent = "Cc1nc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)oc1F"
+    report = DesignSession(agent, three_d=False).matches("oxazole")
+    assert "Substituent positions" in report
+    assert "C at C4" in report and "F at C5" in report  # the flip is visible
+
+
+def test_swap_result_reports_ring_positions_of_the_new_ports():
+    from chemistree.commands import run_command
+
+    session = DesignSession(
+        "Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)ccc1F", three_d=False
+    )
+    run_command(session, "remove 7")  # drop the N-methyl on the core
+    # swap the core for a quinazoline with the dichlorophenyl port ([4*]) landing on C2
+    message = run_command(session, "swap 0 [4*]c1ncc2cc([3*])ccc2n1")
+    assert "quinazoline" in message
+    assert "[4*] at C2" in message  # the misplacement is visible in the result
+
+
+def test_non_ring_swap_reports_no_position_note():
+    from chemistree.commands import run_command
+
+    session = DesignSession("Cc1ccccc1", three_d=False)  # toluene
+    methyl = next(
+        n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings() == 0
+    )
+    message = run_command(session, f"swap {methyl} [1*]C(F)(F)F")
+    assert "position" not in message
+
+
 def test_edits_are_undoable():
     session = DesignSession("Cc1ccccc1", three_d=False)
     start = session.smiles()
@@ -626,3 +732,65 @@ def _affinity(describe: str) -> float:
     match = re.search(r"(-?\d+\.\d+)", line)
     assert match is not None
     return float(match.group(1))
+
+
+def test_pose_sdf_exports_the_current_conformer():
+    session = DesignSession("CCc1ccccc1", three_d=True)
+    sdf = session.pose_sdf()
+    assert "V2000" in sdf  # a molblock with a conformer
+    assert sdf.rstrip().endswith("$$$$")  # a complete SDF record
+    posed = Chem.MolFromMolBlock(sdf, removeHs=False)
+    assert posed.GetNumConformers() == 1
+    assert Chem.MolToSmiles(Chem.RemoveHs(posed)) == session.smiles()
+
+
+def test_pose_sdf_requires_3d():
+    session = DesignSession("CCc1ccccc1", three_d=False)
+    with pytest.raises(ValueError, match="3D coordinates"):
+        session.pose_sdf()
+
+
+_CORE_HOP_START = "Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)c(=O)n(C)c3n2)ccc1F"
+_CORE_HOP_GOLD = Chem.CanonSmiles("Cc1cc(Nc2ncc3cc(-c4c(Cl)cccc4Cl)ccc3n2)ccc1F")
+
+
+def _core_hop_session():
+    """The abl1 ligand with the N-methyl removed, so the scaffold has two open ports."""
+    session = DesignSession(_CORE_HOP_START, three_d=False)
+    session.remove(7)  # the N-methyl leaf on the scaffold, freeing its third port
+    return session
+
+
+def test_swap_by_ring_name_places_ports_at_locants():
+    # The core hop that stumped the hand-SMILES path: name the ring, place each port.
+    session = _core_hop_session()
+    session.swap(
+        0, "quinazoline 3@2 4@6"
+    )  # [3*] aniline at C2, [4*] dichlorophenyl at C6
+    assert session.smiles() == _CORE_HOP_GOLD
+
+
+def test_swap_by_smiles_still_works():
+    # The duality: the same result via a hand-written ported ring SMILES.
+    session = _core_hop_session()
+    session.swap(0, "[3*]c1ncc2cc([4*])ccc2n1")
+    assert session.smiles() == _CORE_HOP_GOLD
+
+
+def test_swap_by_ring_name_rejects_a_ring_nitrogen_locant():
+    session = _core_hop_session()
+    with pytest.raises(ValueError, match="no free valence"):
+        session.swap(0, "quinazoline 3@1 4@6")  # position 1 is a ring nitrogen
+
+
+def test_grow_by_ring_name_matches_the_hand_smiles():
+    # The grow duality: a named ring and its hand-SMILES equivalent grow the same.
+    def grown(group):
+        session = DesignSession("Cc1ccccc1", three_d=False)
+        ring = next(
+            n.id for n in session.tree.nodes if n.current.mol.GetRingInfo().NumRings()
+        )
+        session.grow(ring, _aromatic_h_on_ring(session, ring), group)
+        return session.smiles()
+
+    assert grown("pyridine 3") == grown("[*]c1cccnc1")  # both a 3-pyridyl

@@ -1,0 +1,5 @@
+# The prepared DUD-Z targets (10 receptor + reference pairs, ~2 MB) are committed so the
+# benchmark reproduces with no network; fetch_dudz.py + manifest.jsonl record their provenance.
+# Raw run output — commit the tar.gz'd evidence, not the loose JSONL.
+results/*.jsonl
+!results/*.tar.gz

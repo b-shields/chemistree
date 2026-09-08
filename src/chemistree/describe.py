@@ -34,10 +34,13 @@ _OVERVIEW_NOTE = (
 
 _GROUP_LEGEND = (
     "Atom ids are `:k` (use as grow/mutate position_id); `[n*]` = port "
-    "(connects groups).\n"
-    "Positions: each heavy atom lists nearby atoms as ortho/meta/para (same "
-    "aromatic ring) or alpha/beta/gamma (greek, by bond count); `id·[n*]` marks an "
-    "atom bearing a port. Grow at a listed hydrogen id; mutate a heavy-atom id."
+    "(connects groups). Nearby atoms are named as `[element:id]` tokens, with "
+    "`·[n*]` marking one that bears a port.\n"
+    "Positions list each heavy atom's neighbours by bond distance. On a plain "
+    "benzene ring the first three are named ortho, meta, para (= 1, 2, 3 bonds; "
+    "greek alpha, beta, gamma); every other relation — a fused ring included — is "
+    "a plain bond count (`2 bonds`, `3 bonds`, …). Grow at a listed hydrogen id; "
+    "mutate a heavy-atom id."
 )
 
 _MAP_ID = re.compile(r":(\d+)]")
@@ -226,18 +229,6 @@ def _atom_label(atom: Chem.Atom) -> str:
 PortNames = Optional[dict[int, Optional[str]]]
 
 _AROMATIC_TERMS = {1: "ortho", 2: "meta", 3: "para"}
-_GREEK_TERMS = [
-    "alpha",
-    "beta",
-    "gamma",
-    "delta",
-    "epsilon",
-    "zeta",
-    "eta",
-    "theta",
-    "iota",
-    "kappa",
-]
 
 
 def positions(
@@ -248,9 +239,10 @@ def positions(
     One line per heavy atom (a mutate target). Each line names the atom's element,
     the ids of its hydrogens (grow targets), any port it bears, and the heavy atoms
     within ``radius`` bonds grouped by their relation to it: ortho/meta/para when
-    both atoms are aromatic and share a ring, otherwise greek (alpha, beta, …).
-    Ports annotate the heavy atom that bears them (``4·[3*]``), so a relation to a
-    substituent is measured atom-to-atom, with no off-by-one.
+    both atoms are aromatic and share a plain (non-fused) benzene ring, otherwise
+    the plain bond count (``2 bonds``). Ports annotate the heavy atom that bears them
+    (``[c:4]·[3*]``), so a relation to a substituent is measured atom-to-atom, with
+    no off-by-one.
 
     Args:
         mol: The fragment molecule (with explicit hydrogens and dummy ports).
@@ -318,9 +310,9 @@ def _position_line(
         grouped[(distance, term)].append(_landmark(mol, y, port_names))
     ordered = sorted(
         grouped.items(),
-        # Same-ring aromatic terms (ortho/meta/para) first, then greek, each by
-        # distance — so an atom's ring neighbourhood reads contiguously before any
-        # cross-ring or substituent relations.
+        # Same-ring aromatic terms (ortho/meta/para) first, then bond counts, each
+        # by distance — so an atom's ring neighbourhood reads contiguously before
+        # any cross-ring or substituent relations.
         key=lambda item: (item[0][1] not in _AROMATIC_TERMS.values(), item[0][0]),
     )
     relations = "; ".join(
@@ -333,17 +325,35 @@ def _position_line(
 def _relation_term(
     mol: Chem.Mol, x: int, y: int, distance: int, rings: list[set[int]]
 ) -> str:
-    """Positional term for ``y`` relative to ``x`` at a bond ``distance``."""
-    aromatic_pair = (
+    """Positional term for ``y`` relative to ``x`` at a bond ``distance``.
+
+    ortho/meta/para (1/2/3) only when both atoms are aromatic and share a plain
+    benzene ring; otherwise the plain bond count. ortho/meta/para are benzene
+    terms, so they are withheld from 5-membered rings and from fused ring systems
+    (which chemists number instead).
+    """
+    benzene_pair = (
         mol.GetAtomWithIdx(x).GetIsAromatic()
         and mol.GetAtomWithIdx(y).GetIsAromatic()
-        and any(x in ring and y in ring for ring in rings)
+        and _shares_benzene_ring(x, y, rings)
     )
-    if aromatic_pair and distance in _AROMATIC_TERMS:
+    if benzene_pair and distance in _AROMATIC_TERMS:
         return _AROMATIC_TERMS[distance]
-    if distance - 1 < len(_GREEK_TERMS):
-        return _GREEK_TERMS[distance - 1]
-    return f"{distance} bonds"
+    return f"{distance} bond" if distance == 1 else f"{distance} bonds"
+
+
+def _shares_benzene_ring(x: int, y: int, rings: list[set[int]]) -> bool:
+    """True when x and y share a 6-membered ring fused to no other ring.
+
+    A ring is fused when one of its atoms also belongs to another ring; ortho/
+    meta/para apply only on a standalone benzene-type ring, not across a fused
+    system.
+    """
+    for ring in rings:
+        if len(ring) == 6 and x in ring and y in ring:
+            if all(sum(a in other for other in rings) == 1 for a in ring):
+                return True
+    return False
 
 
 def _descriptor(mol: Chem.Mol, x: int, port_names: PortNames) -> str:
@@ -362,12 +372,20 @@ def _descriptor(mol: Chem.Mol, x: int, port_names: PortNames) -> str:
 
 
 def _landmark(mol: Chem.Mol, y: int, port_names: PortNames) -> str:
-    """A neighbour atom's id, annotated with any port it bears (``4·[3*]``)."""
+    """A neighbour as its ``[elem:id]`` token, plus any port it bears.
+
+    The element uses the atom map's case (aromatic lowercase, e.g. ``[c:4]``), so
+    the token matches the Atom Map line verbatim. A borne port is appended as
+    ``[n:9]·[2*] name``.
+    """
     atom = mol.GetAtomWithIdx(y)
+    symbol = atom.GetSymbol()
+    if atom.GetIsAromatic():
+        symbol = symbol.lower()
     ports = [
         _port_text(n, port_names) for n in atom.GetNeighbors() if n.GetAtomicNum() == 0
     ]
-    return str(y) + "".join(f"·{port}" for port in ports)
+    return f"[{symbol}:{y}]" + "".join(f"·{port}" for port in ports)
 
 
 def _port_text(dummy: Chem.Atom, port_names: PortNames) -> str:

@@ -1,0 +1,2 @@
+{"id": "grow-methyl", "category": "growing", "instruction": "Add a methyl at C4, the vinyl carbon of the A-ring enone.", "gold": "CC1=C2CCC3C(CCC4(C)C(O)CCC34)C2(C)CCC1=O", "smiles": "CC12CCC(=O)C=C1CCC1C2CCC2(C)C(O)CCC12"}
+{"id": "sub-amine", "category": "substitution", "instruction": "Replace the 17-hydroxyl with a primary amine.", "gold": "CC12CCC(=O)C=C1CCC1C2CCC2(C)C(N)CCC12", "smiles": "CC12CCC(=O)C=C1CCC1C2CCC2(C)C(O)CCC12"}

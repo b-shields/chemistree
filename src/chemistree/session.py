@@ -26,9 +26,18 @@ from chemistree.edits import grow_region, mutate_region, swap_region
 from chemistree.fragment import Fragment
 from chemistree.fragmenter import fragment
 from chemistree.geometry import align_transform
+from chemistree.heterocycles import (
+    HETEROCYCLES,
+    build_ported_ring,
+    heterocycle_name,
+    heterocycle_smiles,
+    named_ring_locants,
+    number_ring_system,
+    ring_locant_summary,
+)
 from chemistree.naming import group_smiles
 from chemistree.properties import profile_markdown
-from chemistree.receptor import Receptor, Residue
+from chemistree.receptor import Receptor, Residue, min_distance
 from chemistree.scoring import (
     ScoreComponents,
     atom_typing,
@@ -142,6 +151,21 @@ class DesignSession:
         """Canonical SMILES of the current molecule, without explicit hydrogens."""
         return str(Chem.MolToSmiles(Chem.RemoveHs(self.tree.reconstruct())))
 
+    def pose_sdf(self) -> str:
+        """The current 3D pose as one SDF record.
+
+        Returns:
+            A V2000 molblock of the current molecule, with its conformer and
+            explicit hydrogens, plus the ``$$$$`` terminator so the text is a
+            complete SDF record.
+
+        Raises:
+            ValueError: If the ligand lacks 3D coordinates.
+        """
+        if not self.tree.nodes[0].current.mol.GetNumConformers():
+            raise ValueError("write_pose needs a ligand with 3D coordinates")
+        return str(Chem.MolToMolBlock(self.molecule())) + "$$$$\n"
+
     def swap(self, group_id: int, group: str | Chem.Mol) -> None:
         """Replace a group's fragment with a new group.
 
@@ -152,7 +176,10 @@ class DesignSession:
 
         Args:
             group_id: Id of the group to replace.
-            group: A curated group name or a SMILES/Mol with matching ports.
+            group: A curated group name, a SMILES/Mol with matching ``[*]`` ports,
+                or a vendored ring by name with port locants
+                (``"quinazoline 3@2 4@6"`` — each of the group's port labels at an
+                IUPAC ring position).
 
         Raises:
             ValueError: If the group cannot be parsed, or its ports do not match
@@ -166,9 +193,11 @@ class DesignSession:
             else None
         )
         posed = node.current.mol.GetNumConformers() > 0
+        named = _named_ring_group(group) if isinstance(group, str) else None
+        target = named if named is not None else group
         try:
             region = swap_region(
-                node.current, _as_group(group), anchor_label=anchor_label
+                node.current, _as_group(target), anchor_label=anchor_label
             )
         except ValueError as error:
             raise self._port_mismatch_error(group_id, error) from error
@@ -224,7 +253,8 @@ class DesignSession:
         Args:
             group_id: Id of the group bearing the hydrogen.
             position_id: Atom id of the hydrogen to replace.
-            group: A curated group name or a SMILES/Mol with one port.
+            group: A curated group name, a SMILES/Mol with one ``[*]`` port, or a
+                vendored ring by name with the attachment locant (``"pyridine 3"``).
 
         Returns:
             Id of the group that now carries the grown group (a new node when the
@@ -234,7 +264,9 @@ class DesignSession:
             ValueError: If ``position_id`` is not a hydrogen of the group.
         """
         node = self.tree.node(group_id)
-        region = grow_region(node.current, position_id, _as_group(group))
+        named = _named_ring_group(group) if isinstance(group, str) else None
+        target = named if named is not None else group
+        region = grow_region(node.current, position_id, _as_group(target))
         with self._edit():
             sub_nodes = self._apply(node, region)
         grown = max(sub_nodes, key=lambda n: n.id if n.id is not None else -1)
@@ -267,18 +299,24 @@ class DesignSession:
             self._apply(node, region)
         return position_id
 
-    def remove(self, group_id: int) -> None:
+    def remove(self, group_id: int) -> tuple[int, int]:
         """Delete a group and its subtree, capping the parent with hydrogen.
 
         Args:
             group_id: Id of the group to remove.
+
+        Returns:
+            The ``(group_id, position_id)`` of the capped attachment: the kept
+            group and the hydrogen id where the removed group was attached, so it
+            can be replaced with :meth:`grow`.
 
         Raises:
             ValueError: If the group is the root scaffold.
         """
         node = self.tree.node(group_id)
         with self._edit():
-            self.tree.remove_subtree(node)
+            capped = self.tree.remove_subtree(node)
+        return capped
 
     def distance(self, residue_id: str) -> str:
         """Report how close each group is to a receptor residue.
@@ -370,6 +408,124 @@ class DesignSession:
                     )
         assert best is not None  # a pocket residue has at least one nearby atom
         return best
+
+    def residues_near(
+        self, group_id: int, position_id: int | None = None, cutoff: float = 4.5
+    ) -> str:
+        """List the receptor residues a group (or one of its atoms) contacts.
+
+        Reports every residue with an atom within ``cutoff`` of the group's heavy
+        atoms — or, when ``position_id`` is given, of that one atom — closest
+        first. This is the group-to-residues view: what a substituent touches in
+        the pocket. Unlike ``contacts``, which keeps only the closest atom per
+        residue, it names every residue near the atom, so an atom-specific query
+        ("which residues does this chlorine reach?") is answered in full.
+
+        Args:
+            group_id: Id of the group to measure from (from ``describe``).
+            position_id: Optional heavy-atom id in the group (from
+                ``describe_group``); omit to measure from the whole group.
+            cutoff: Contact radius in angstrom.
+
+        Returns:
+            Markdown: a table of residue and its minimum distance to the target,
+            sorted closest first.
+
+        Raises:
+            ValueError: If no receptor is loaded, the ligand lacks 3D coordinates,
+                or ``position_id`` is not a heavy atom of the group.
+        """
+        if self.receptor is None:
+            raise ValueError("spatial contacts need a receptor")
+        mol = self.tree.node(group_id).current.mol
+        if not mol.GetNumConformers():
+            raise ValueError("spatial contacts need a ligand with 3D coordinates")
+        target = _target_positions(mol, position_id)
+        hits = [
+            (residue, min_distance(target, self.receptor.residue_positions(residue)))
+            for residue in self.receptor.residues()
+        ]
+        hits = [(residue, dist) for residue, dist in hits if dist <= cutoff]
+        hits.sort(key=lambda hit: hit[1])
+        return _residues_near_report(
+            group_id, self._label(group_id), position_id, cutoff, hits
+        )
+
+    def matches(self, pattern: str) -> str:
+        """Search the current molecule for a substructure, by name or SMILES/SMARTS.
+
+        Check-your-work tool: after a ring swap, confirm you built the ring you
+        meant. ``pattern`` is a heterocycle name (``"quinazoline"``) or a
+        SMILES/SMARTS query. It reports whether the whole molecule contains the
+        pattern and which single group contains it, and names the ring when the
+        pattern is a known heterocycle — so building a quinazoline and searching
+        ``"quinazoline"`` reports a match, while a quinoxaline would not.
+
+        Args:
+            pattern: A heterocycle name, or a SMILES/SMARTS substructure query.
+
+        Returns:
+            Markdown: the whole-molecule match count and the groups that contain it.
+
+        Raises:
+            ValueError: If ``pattern`` is neither a known name nor a parseable
+                SMILES/SMARTS.
+        """
+        name: str | None = None
+        named = heterocycle_smiles(pattern)
+        if named is not None:
+            query = Chem.MolFromSmiles(named)
+            name = pattern.strip().lower()
+        else:
+            query = Chem.MolFromSmiles(pattern)
+            if query is not None:
+                name = heterocycle_name(pattern)
+            else:
+                query = Chem.MolFromSmarts(pattern)
+        if query is None:
+            raise ValueError(
+                f"could not read pattern as a name, SMILES, or SMARTS: {pattern}"
+            )
+        whole = len(self.molecule().GetSubstructMatches(query, uniquify=True))
+        group_hits = [
+            (node.id, self._label(node.id))
+            for node in self.tree.nodes
+            if node.id is not None and node.current.mol.HasSubstructMatch(query)
+        ]
+        # Where each substituent sits, so a right ring with a wrong substituent shows.
+        locants = (
+            named_ring_locants(self.molecule(), name)
+            if name is not None and whole > 0
+            else None
+        )
+        return _matches_report(pattern, name, whole, group_hits, locants)
+
+    def ring_change_note(self, before: Chem.Mol, after: Chem.Mol) -> str:
+        """A note on a ring edit: the vendored ring and its ports' canonical positions.
+
+        Used by the command layer to append position feedback to swap/grow/mutate
+        results when the edit adds, removes, or changes a numbered ring — so the agent
+        sees where each port landed (``[4*] at position 2``) without cross-referencing.
+
+        Args:
+            before: The edited group's fragment before the edit.
+            after: The edited group's fragment after the edit.
+
+        Returns:
+            A leading-``; `` note, or ``""`` when no vendored ring was involved.
+        """
+        was, now = number_ring_system(before), number_ring_system(after)
+        if now is None:
+            if was is not None and _exact_ring(before, was):
+                return f"; the {was[0]} ring was removed"
+            return ""
+        # Only name the previous ring when it was itself an exact vendored ring (not a
+        # sub-ring of a larger fused system), and it differs from the new one.
+        if was is not None and _exact_ring(before, was) and was[0] != now[0]:
+            old_note = ring_locant_summary(before)
+            new_note = ring_locant_summary(after)
+            return f"; {old_note} changed to {new_note}"
+        return f"; {ring_locant_summary(after)}"
 
     def minimize(
         self, group_id: int, degrees: float = 0.0, *, window: float = 180.0
@@ -885,6 +1041,98 @@ def _contacts_report(dist_cutoff: float, contacts: list[_Contact]) -> str:
     return "\n".join(lines)
 
 
+def _target_positions(mol: Chem.Mol, position_id: int | None) -> np.ndarray:
+    """Coordinates to measure from: one heavy atom, or all of a group's heavy atoms.
+
+    Args:
+        mol: The group's fragment molecule, posed in 3D.
+        position_id: A heavy-atom id to measure from, or None for the whole group.
+
+    Returns:
+        An (N, 3) array of the target coordinates.
+
+    Raises:
+        ValueError: If ``position_id`` is out of range or not a heavy atom.
+    """
+    conf = mol.GetConformer()
+    if position_id is None:
+        idxs = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+    else:
+        if not 0 <= position_id < mol.GetNumAtoms():
+            raise ValueError(f"no atom {position_id} in this group")
+        if mol.GetAtomWithIdx(position_id).GetAtomicNum() <= 1:
+            raise ValueError(f"atom {position_id} is not a heavy atom")
+        idxs = [position_id]
+    return np.array([list(conf.GetAtomPosition(i)) for i in idxs])
+
+
+def _residues_near_report(
+    group_id: int,
+    label: str,
+    position_id: int | None,
+    cutoff: float,
+    hits: list[tuple[Residue, float]],
+) -> str:
+    """Render the residues-near table, hits already sorted closest first."""
+    target = f"[{group_id}] {label}"
+    if position_id is not None:
+        target += f" atom {position_id}"
+    lines = [f"# Residues within {cutoff:g} A of {target}", ""]
+    if not hits:
+        lines.append(f"No residue within {cutoff:g} A.")
+        return "\n".join(lines)
+    lines += ["| residue | distance (A) |", "|---|---|"]
+    for residue, distance in hits:
+        lines.append(f"| {residue.name}{residue.number} | {distance:.2f} |")
+    return "\n".join(lines)
+
+
+def _exact_ring(mol: Chem.Mol, numbered: tuple[str, dict[int, int]] | None) -> bool:
+    """True if a vendored ring matched all of ``mol``'s ring system, not a sub-ring."""
+    if numbered is None:
+        return False
+    ring_atoms = sum(1 for a in mol.GetAtoms() if a.IsInRing())
+    return bool(
+        ring_atoms == Chem.MolFromSmiles(HETEROCYCLES[numbered[0]]).GetNumAtoms()
+    )
+
+
+def _matches_report(
+    pattern: str,
+    name: str | None,
+    whole: int,
+    group_hits: list[tuple[int, str]],
+    locants: str | None = None,
+) -> str:
+    """Render the substructure-search report; ``name`` labels a known ring.
+
+    Args:
+        pattern: The query as the caller wrote it.
+        name: The heterocycle name, when the pattern is a known ring.
+        whole: Number of whole-molecule matches.
+        group_hits: ``(group_id, label)`` for each group that contains the pattern.
+        locants: For a matched named ring, where each substituent sits by IUPAC
+            locant (from ``named_ring_locants``); appended so a right ring with a
+            substituent on the wrong carbon is visible. None when not a named ring.
+    """
+    header = f"# Substructure `{pattern}`"
+    if name:
+        header += f" ({name})"
+    lines = [header, ""]
+    if whole == 0:
+        lines.append("Whole molecule: no match.")
+        return "\n".join(lines)
+    lines.append(f"Whole molecule: {whole} {'match' if whole == 1 else 'matches'}.")
+    if group_hits:
+        groups = ", ".join(f"[{gid}] {label}" for gid, label in group_hits)
+        lines.append(f"Contained in group(s): {groups}.")
+    else:
+        lines.append("Not contained in any single group.")
+    if locants:
+        lines.append(f"Substituent positions: {locants}")
+    return "\n".join(lines)
+
+
 def _atom_distances(mol: Chem.Mol, residue: np.ndarray) -> list[tuple[int, str, float]]:
     """Each heavy atom's id, symbol, and minimum distance to the residue atoms."""
     conf = mol.GetConformer()
@@ -942,6 +1190,50 @@ def _element_number(element: str) -> int:
     if number <= 0:
         raise ValueError(f"unknown element: {element!r}")
     return int(number)
+
+
+def _named_ring_group(group: str) -> Chem.Mol | None:
+    """Parse a ``<ring> <label>@<locant> …`` spec into a ported ring Mol, or None.
+
+    The named-ring input to swap and grow: the first token is a vendored ring name,
+    the rest are port placements — ``<label>@<locant>`` (swap, the label is one of the
+    group's ports) or a bare ``<locant>`` (grow, a single unlabeled port). Returns None
+    when the string is not a named-ring spec, so the caller falls back to the
+    SMILES/curated-name path.
+
+    Args:
+        group: The group string as typed.
+
+    Returns:
+        The ported ring Mol, or None when ``group`` does not name a vendored ring.
+
+    Raises:
+        ValueError: If a named ring is given without a parseable port placement.
+    """
+    tokens = group.split()
+    if not tokens or tokens[0].lower() not in HETEROCYCLES:
+        return None
+    name = tokens[0].lower()
+    placements: list[tuple[int, int]] = []
+    for token in tokens[1:]:
+        label_str, sep, locant_str = token.partition("@")
+        try:
+            if sep:  # <label>@<locant> (a labelled port, for swap)
+                placements.append((int(label_str) if label_str else 0, int(locant_str)))
+            else:  # bare <locant> (a single unlabelled port, for grow)
+                placements.append((0, int(label_str)))
+        except ValueError:
+            raise ValueError(
+                f"bad port placement {token!r}; use <label>@<locant> (swap) or "
+                f"<locant> (grow)"
+            ) from None
+    if not placements:
+        raise ValueError(
+            f"{name} needs port placements: 'swap <id> {name} <label>@<locant> ...' "
+            f"(labels are the group's ports from describe_group), or "
+            f"'grow <id> <pos> {name} <locant>'"
+        )
+    return build_ported_ring(name, placements)
 
 
 def _as_group(group: str | Chem.Mol) -> str | Chem.Mol:
