@@ -32,6 +32,15 @@ atom of it); it names every residue within reach, not just the closest contact. 
 structure-based pass, use contacts, distance, or residues_near to read the residues around
 each open position and choose edits that suit them.
 
+To answer a question about which or how many receptor residues lie near a named part of your
+ligand (e.g. "which residue is closest to the carboxamide", "how many residues within 4.0 Å
+of the sulfonyl group"), call residues_near on that one group with the exact cutoff the
+question gives, and read that table directly — do not answer from contacts, which maps the
+whole site and reports the closest group per residue, so it names the wrong residue for a
+part-specific question. Read the top row for a "which is nearest" question; count the rows
+for a "how many" question. Count only amino-acid residues: skip any metal ion, cofactor, or
+water (e.g. ZN, MG, HOH) the table lists, which is not a receptor residue.
+
 When a receptor is loaded, the group listing ends with a predicted affinity (Vinardo score;
 more negative is better) and, separately, the ligand's internal energy, both refreshed after
 every edit. Read the affinity to judge whether a change helped binding. The affinity is

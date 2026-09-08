@@ -211,8 +211,12 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         each group) and ``contacts`` (the whole pocket → closest group per residue).
         Unlike ``contacts``, it names *every* residue near the target, not just the
         closest atom's — so this is the tool for a "how many / which residues are
-        within X of this chlorine?" question. Omit ``position_id`` to measure from
-        the whole group, or pass a heavy-atom id (from ``describe_group``) for one atom.
+        within X of this chlorine?" question: read the top row for the nearest, or
+        count the rows for a total, and answer from this table, not from ``contacts``.
+        The table may list a metal ion, cofactor, or water (e.g. ZN, MG, HOH); those
+        are not amino-acid residues, so exclude them from a residue count. Omit
+        ``position_id`` to measure from the whole group, or pass a heavy-atom id (from
+        ``describe_group``) for one atom.
 
         Args:
             group_id: Group to measure from (from ``describe``).
