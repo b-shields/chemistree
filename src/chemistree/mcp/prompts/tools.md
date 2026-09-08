@@ -72,6 +72,18 @@ quinoxaline) and repeats where each substituent sits, so a substituent on the wr
 carbon shows even after the swap looked done. If any substituent is at the wrong locant, undo
 and swap again with the ports and substituents corrected.
 
+Tell two kinds of ring change apart. When only **one ring atom's element** changes — an
+aza-substitution that turns a ring carbon into N (imidazole → 1,2,3-triazole), or a ring CH2
+into N (piperidine → piperazine) — do it as a single `mutate` on that one atom, not a
+whole-ring swap. Find the atom with describe_group — the one the request names, e.g. the
+carbon between the two ring nitrogens, or the CH2 para to the ring N — and mutate it to N.
+mutate keeps the ring's attachment port and every substituent exactly where they are and
+reports the new ring name and locants, so there is no attachment isomer to pick and no open
+`[*]` port left behind. Rebuilding the whole ring by hand with swap for such a change risks
+putting the attachment on the wrong ring atom or leaving a dummy port unfilled. Reserve swap
+for a change to the ring framework itself — a different ring, a fused or contracted ring, or
+a bioisostere replacement.
+
 A fused **carbocycle** — naphthalene, and any all-carbon fused ring — is not in the
 numbered-ring table, so a name-with-locant swap does not build it (`naphthalene 2` errors)
 and neither the swap result nor `matches` reports its locants: nothing verifies the
