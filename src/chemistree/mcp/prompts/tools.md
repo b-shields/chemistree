@@ -82,3 +82,10 @@ A **tetrazole** carboxyl bioisostere has two NH tautomers, and the numbered-ring
 **1H-tetrazol-5-yl**, `[*]c1nnn[nH]1`, where the NH sits next to the attachment carbon.
 Hand-write that 1H SMILES for the swap rather than taking the built 2H ring; the NH position
 is not flagged by any locant check.
+
+A small **saturated heterocycle** — oxetane, azetidine — is not in the group tables either, so
+hand-write its port SMILES and get the ring size right; the common error is building the
+5-membered ring for a 4-membered name. **Oxetane** is the **4-membered** oxygen ring:
+`oxetan-3-yl` = `[*]C1COC1` (the attachment carbon sits across the ring from the O). Do not
+confuse it with the 5-membered oxolane / tetrahydrofuran `[*]C1CCOC1`. Count the ring atoms of
+what you built before you finish.
