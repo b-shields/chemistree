@@ -66,3 +66,12 @@ Then call matches with the ring name: it confirms the ring identity (a quinazoli
 quinoxaline) and repeats where each substituent sits, so a substituent on the wrong ring
 carbon shows even after the swap looked done. If any substituent is at the wrong locant, undo
 and swap again with the ports and substituents corrected.
+
+A fused **carbocycle** — naphthalene, and any all-carbon fused ring — is not in the
+numbered-ring table, so a name-with-locant swap does not build it (`naphthalene 2` errors)
+and neither the swap result nor `matches` reports its locants: nothing verifies the
+attachment isomer for you. Write the group SMILES by hand and pick the isomer yourself. A
+**2-naphthyl** (β; the attachment carbon is one carbon away from a ring-fusion carbon) is
+`[*]c1ccc2ccccc2c1`; a **1-naphthyl** (α; the attachment carbon sits next to a fusion carbon)
+is `[*]c1cccc2ccccc12`. Read the fused SMILES back atom by atom before you finish, since no
+locant check will flag a wrong isomer.
