@@ -185,3 +185,6 @@ PLAN.md
 
 # Driving-session notes (not versioned)
 TESTING_LOG*.md
+
+# Autonomous benchmark-optimization workspace (notes, throwaway scripts, run logs)
+optimize/
