@@ -509,7 +509,24 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "andr": [
         {"kind": "count", "smarts": "[#6]=O", "group": "A-ring ketone oxygen"},
-        {"kind": "count", "smarts": "[OX2H]", "group": "17-hydroxyl"},
+        # Nearest, not count: the within-4.0-A 17-hydroxyl count (=3) was
+        # boundary-brittle -- LEU701 sits at 4.18 A, only 0.18 A outside the cutoff,
+        # and the hydroxyl's own nearest is a coin-flip (ASN705 2.66 vs THR877 2.75,
+        # both bidentate H-bond partners, gap 0.09). The C18 angular methyl is a clean
+        # chemistree leaf group; its nearest residue is THR877 @ 2.51 A, runner MET742
+        # @ 3.75 A (gap 1.24): which residue the D-ring angular methyl packs against --
+        # a robust, single-answer steric-SAR question (angular-methyl beta-face
+        # contacts drive steroid selectivity; cf. 19-nortestosterone), distinct from
+        # probe-1's A-ring ketone. The recursive SMARTS matches only the methyl carbon
+        # on the ring-junction carbon of the 17-hydroxyl-bearing ring.
+        {
+            "kind": "nearest",
+            "smarts": "[CH3;$([CH3][CX4]([CX4])([CX4])[CX4][OX2H])]",
+            "group": (
+                "C18 angular methyl (the methyl on the ring-junction carbon of the "
+                "ring that bears the 17-hydroxyl)"
+            ),
+        },
     ],
     "hivpr": [
         {"kind": "nearest", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
