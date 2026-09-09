@@ -508,7 +508,26 @@ _PROBES: dict[str, list[dict]] = {
         {"kind": "count", "smarts": "o1cccc1", "group": "furan ring"},
     ],
     "andr": [
-        {"kind": "count", "smarts": "[#6]=O", "group": "A-ring ketone oxygen"},
+        # Nearest, not count: the within-4.0-A A-ring ketone count (=5) was the
+        # thinnest steroid case -- the 5th residue sits only 0.06 A inside the 4.0
+        # cutoff, a coin-flip integer, and the 3-keto's own nearest is a coin-flip
+        # (bidentate: ARG752 2.19 vs GLN711 2.30, gap 0.12). The C19 angular methyl
+        # is a clean chemistree leaf group (the methyl on the ring-junction carbon
+        # adjacent to the A-ring enone); its nearest residue is MET745 @ 3.52 A,
+        # runner TRP741 @ 3.86 A (gap 0.34): which residue the 10-beta angular methyl
+        # packs against -- a robust, single-answer steric-SAR question (the C19
+        # methyl defines the steroid beta-face and drives AR selectivity; cf.
+        # 19-nortestosterone/nandrolone), distinct from probe-2's C18 methyl
+        # (THR877). The recursive SMARTS matches only the methyl carbon on the
+        # ring-junction carbon bonded to the enone C=C.
+        {
+            "kind": "nearest",
+            "smarts": "[CH3;$([CH3][CX4]([CX4])([CX4])[CX3]=[CX3])]",
+            "group": (
+                "C19 angular methyl (the methyl on the ring-junction carbon "
+                "adjacent to the A-ring enone)"
+            ),
+        },
         # Nearest, not count: the within-4.0-A 17-hydroxyl count (=3) was
         # boundary-brittle -- LEU701 sits at 4.18 A, only 0.18 A outside the cutoff,
         # and the hydroxyl's own nearest is a coin-flip (ASN705 2.66 vs THR877 2.75,
