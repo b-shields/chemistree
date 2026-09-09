@@ -499,7 +499,12 @@ _PROBES: dict[str, list[dict]] = {
         {"kind": "count", "smarts": "[F]", "group": "benzyl fluorine"},
     ],
     "aa2ar": [
-        {"kind": "count", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
+        # Nearest, not count: the within-4.0-A count (=4) was boundary-brittle --
+        # PHE168 sits at 3.77 A, only 0.23 A inside the 4.0 cutoff, a coin-flip integer.
+        # The exocyclic amine's nearest residue is ASN253 @ 3.01 A, runner GLU169 @
+        # 3.43 A (gap 0.42): the canonical A2A recognition H-bond -- which residue
+        # anchors the exocyclic amine -- mirroring the egfr/hs90a NH2-hinge probes.
+        {"kind": "nearest", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
         {"kind": "count", "smarts": "o1cccc1", "group": "furan ring"},
     ],
     "andr": [
