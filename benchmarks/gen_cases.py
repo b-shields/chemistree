@@ -217,7 +217,7 @@ def edits_2d(target: str) -> list[dict]:
                 "core-triazine",
                 "core_hopping",
                 "Aza-substitute the aminopyrimidine CH between the two ring nitrogens, "
-                "making a 1,3,5-triazine.",
+                "making a 1,2,3-triazine.",
                 aza(s, only(m, "[cH1](:n):n")),
             ),
         ]
