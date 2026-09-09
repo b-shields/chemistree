@@ -508,7 +508,17 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "hivpr": [
         {"kind": "nearest", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
-        {"kind": "count", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
+        # Nearest, not count: the sulfonyl count was boundary-brittle (ILE50 at
+        # 4.28 A, margin 0.28) and "the sulfonyl group" (S+2O) is not a resolvable
+        # target -- the group decomposition lumps it into the whole
+        # sulfonamide+isobutyl. The pyrrolidine ring is a clean group, and its nearest
+        # residue is the catalytic ASP25 (gap 0.75): the canonical HIV-protease core
+        # question, pairing with the flap contact in probe-1.
+        {
+            "kind": "nearest",
+            "smarts": "[NX3;R][CX4;R][CX4;R][CX4;R][CX4;R]",
+            "group": "pyrrolidine ring",
+        },
     ],
     "fa10": [
         {"kind": "nearest", "smarts": "[OX2H]", "group": "secondary alcohol hydroxyl"},
