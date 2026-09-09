@@ -1,2 +1,2 @@
 {"id": "probe-1-nearest", "ligand": "benchmarks/data/ada/reference.sdf", "receptor": "benchmarks/data/ada/receptor.pdb", "question": "Which receptor residue (give its name and number, e.g. ASP381) has an atom closest to the ligand's imidazole carboxamide?", "answer": "ASP296"}
-{"id": "probe-2-count", "ligand": "benchmarks/data/ada/reference.sdf", "receptor": "benchmarks/data/ada/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's secondary alcohol hydroxyl?", "answer": "5"}
+{"id": "probe-2-count", "ligand": "benchmarks/data/ada/reference.sdf", "receptor": "benchmarks/data/ada/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's naphthalene ring?", "answer": "7"}

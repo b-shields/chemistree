@@ -579,7 +579,14 @@ _PROBES: dict[str, list[dict]] = {
             "smarts": "[NX3H2][CX3]=O",
             "group": "imidazole carboxamide",
         },
-        {"kind": "count", "smarts": "[OX2H]", "group": "secondary alcohol hydroxyl"},
+        # Naphthalene, not the hydroxyl: the within-4.0-A hydroxyl count (=5) was
+        # boundary-brittle -- ARG101 sits 0.05 A outside and TYR102 0.09 A inside the
+        # 4.0 cutoff, a coin-flip integer. The naphthalene is chemistree group [0]
+        # (a clean 10-atom leaf); its within-4.0-A count is 7 with a 0.33 A margin
+        # (LEU58 the nearest excluded residue at 4.74 A): how buried the hydrophobic
+        # naphthalene anchor is -- a robust contact census, distinct from probe-1's
+        # carboxamide anchor (ASP296).
+        {"kind": "count", "smarts": "c1ccc2ccccc2c1", "group": "naphthalene ring"},
     ],
     "nram": [
         {"kind": "count", "smarts": "[CX3](=O)[OX2H]", "group": "carboxylic acid"},
