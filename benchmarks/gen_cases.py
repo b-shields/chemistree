@@ -396,7 +396,13 @@ def edits_2d(target: str) -> list[dict]:
 
 # --- probe answers (independent of chemistree: raw RDKit + numpy) --------------------
 def _receptor_residues(pdb: str) -> dict[str, np.ndarray]:
-    """Group receptor atoms into standard-AA residues, label -> (K,3) coords."""
+    """Group receptor atoms into standard-AA residues, label -> (K,3) coords.
+
+    The label is ``NAME + number + "/" + chain`` so a homodimer's two copies of a
+    residue (e.g. PRO81/A and PRO81/C) stay distinct. Keying only by name+number
+    would collapse them (last write wins), corrupting both the residue's coordinates
+    and any per-residue count.
+    """
     rec = Chem.MolFromPDBFile(pdb, removeHs=False, sanitize=False)
     conf = rec.GetConformer()
     groups: dict[tuple, list] = defaultdict(list)
@@ -411,7 +417,7 @@ def _receptor_residues(pdb: str) -> dict[str, np.ndarray]:
         )
         pos = conf.GetAtomPosition(atom.GetIdx())
         groups[key].append((pos.x, pos.y, pos.z))
-    return {f"{k[2]}{k[1]}": np.array(v) for k, v in groups.items()}
+    return {f"{k[2]}{k[1]}/{k[0]}": np.array(v) for k, v in groups.items()}
 
 
 def _group_coords(sdf: str, smarts: str) -> np.ndarray:
@@ -438,12 +444,35 @@ def _distances(target: str, smarts: str) -> list[tuple[float, str]]:
     return sorted((_mindist(c, coords), label) for label, c in res.items())
 
 
+def _name_num(label: str) -> str:
+    """The ``NAME+number`` part of a residue label, dropping the ``/chain`` suffix."""
+    return label.split("/")[0]
+
+
 def nearest_answer(target: str, smarts: str, *, min_margin: float = 0.30) -> str:
-    """The nearest residue label; assert the runner-up is comfortably farther."""
+    """The nearest residue's name+number; assert the runner-up is comfortably farther.
+
+    Args:
+        target: Benchmark target key.
+        smarts: SMARTS selecting the ligand group to measure from.
+        min_margin: Minimum gap (Angstrom) to the nearest residue of a *different*
+            name+number. A same-name copy on another chain is not a competing
+            answer, so it does not shrink the margin.
+
+    Returns:
+        The winning residue as ``NAME+number`` (e.g. ``ILE50``), matching the
+        question's requested format.
+
+    Raises:
+        AssertionError: If the margin to the next distinct residue is below
+            ``min_margin`` (a coin-flip nearest is refused, not shipped).
+    """
     ds = _distances(target, smarts)
-    margin = ds[1][0] - ds[0][0]
+    winner = _name_num(ds[0][1])
+    runner = next(d for d, lab in ds[1:] if _name_num(lab) != winner)
+    margin = runner - ds[0][0]
     assert margin >= min_margin, f"{target}: nearest margin {margin:.2f} too small"
-    return ds[0][1]
+    return winner
 
 
 def count_answer(
