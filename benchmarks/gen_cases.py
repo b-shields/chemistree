@@ -486,7 +486,7 @@ _PROBES: dict[str, list[dict]] = {
         {"kind": "count", "smarts": "[Cl]", "group": "naphthalene chlorine"},
     ],
     "hdac8": [
-        {"kind": "count", "smarts": "[NX3][OX2H]", "group": "hydroxamic acid"},
+        {"kind": "count", "smarts": "[CX3](=O)[NX3][OX2H]", "group": "hydroxamic acid"},
         {
             "kind": "count_name",
             "smarts": "[NX3][OX2H]",
