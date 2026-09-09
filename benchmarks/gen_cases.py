@@ -530,7 +530,14 @@ _PROBES: dict[str, list[dict]] = {
         {"kind": "count", "smarts": "[Cl]", "group": "naphthalene chlorine"},
     ],
     "hdac8": [
-        {"kind": "count", "smarts": "[CX3](=O)[NX3][OX2H]", "group": "hydroxamic acid"},
+        # Nearest, not count: the within-4.0-A hydroxamic count (=8) was
+        # boundary-brittle -- the 8th residue sits only 0.23 A inside the 4.0 cutoff,
+        # a coin-flip integer. The warhead is still probed by probe-2 (its histidine
+        # count). The N-methylpyrrole scaffold's ring is chemistree group [1]
+        # "pyrrole"; its nearest residue is PHE208 @ 3.27 A, runner ASP101 @ 3.68 A
+        # (gap 0.41): which residue the central scaffold ring packs against -- a
+        # distinct, robust, single-answer contact question.
+        {"kind": "nearest", "smarts": "n1cccc1", "group": "pyrrole ring"},
         {
             "kind": "count_name",
             "smarts": "[NX3][OX2H]",

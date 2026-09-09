@@ -1,2 +1,2 @@
-{"id": "probe-1-count", "ligand": "benchmarks/data/hdac8/reference.sdf", "receptor": "benchmarks/data/hdac8/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's hydroxamic acid?", "answer": "8"}
+{"id": "probe-1-nearest", "ligand": "benchmarks/data/hdac8/reference.sdf", "receptor": "benchmarks/data/hdac8/receptor.pdb", "question": "Which receptor residue (give its name and number, e.g. ASP381) has an atom closest to the ligand's pyrrole ring?", "answer": "PHE208"}
 {"id": "probe-2-count_name", "ligand": "benchmarks/data/hdac8/reference.sdf", "receptor": "benchmarks/data/hdac8/receptor.pdb", "question": "How many histidine residues have any atom within 4.0 Angstrom of the ligand's hydroxamic acid?", "answer": "3"}
