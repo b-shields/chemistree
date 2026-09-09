@@ -527,7 +527,15 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "fa10": [
         {"kind": "nearest", "smarts": "[OX2H]", "group": "secondary alcohol hydroxyl"},
-        {"kind": "count", "smarts": "[Cl]", "group": "naphthalene chlorine"},
+        # Nearest, not count: the within-4.0-A naphthalene-chlorine count (=6) was
+        # boundary-brittle -- the 6th residue sits only ~0.08 A inside the 4.0
+        # cutoff, a coin-flip integer. The sulfone linker is chemistree group [4]
+        # "sulfonyl" (exactly S+2O -- a sulfone S-C,S-C is isolated cleanly, unlike
+        # a sulfonamide); its nearest residue is GLN192 @ 2.64 A, runner CYX220 @
+        # 3.16 A (gap 0.52): which residue the sulfonyl linker packs against -- a
+        # distinct, robust, single-answer contact question at the fXa S1/S4 junction,
+        # pairing with probe-1's hydroxyl anchor (GLY216).
+        {"kind": "nearest", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
     ],
     "hdac8": [
         # Nearest, not count: the within-4.0-A hydroxamic count (=8) was
