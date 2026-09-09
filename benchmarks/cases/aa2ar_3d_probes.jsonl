@@ -1,2 +1,2 @@
 {"id": "probe-1-count", "ligand": "benchmarks/data/aa2ar/reference.sdf", "receptor": "benchmarks/data/aa2ar/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's exocyclic amino (NH2)?", "answer": "4"}
-{"id": "probe-2-count", "ligand": "benchmarks/data/aa2ar/reference.sdf", "receptor": "benchmarks/data/aa2ar/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's furan ring?", "answer": "3"}
+{"id": "probe-2-count", "ligand": "benchmarks/data/aa2ar/reference.sdf", "receptor": "benchmarks/data/aa2ar/receptor.pdb", "question": "How many receptor residues have any atom within 4.0 Angstrom of the ligand's furan ring?", "answer": "6"}

@@ -471,7 +471,7 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "aa2ar": [
         {"kind": "count", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
-        {"kind": "count", "smarts": "[o]", "group": "furan ring"},
+        {"kind": "count", "smarts": "o1cccc1", "group": "furan ring"},
     ],
     "andr": [
         {"kind": "count", "smarts": "[#6]=O", "group": "A-ring ketone oxygen"},
