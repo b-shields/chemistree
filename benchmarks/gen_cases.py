@@ -540,7 +540,12 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "hs90a": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
-        {"kind": "count", "smarts": "[F]", "group": "ring fluorine"},
+        # Nearest, not count: the within-4.0-A count (=5) was boundary-brittle --
+        # MET98 sits at 3.88 A, only 0.12 A inside the 4.0 cutoff, a coin-flip integer.
+        # The ring fluorine's nearest residue is GLY97 @ 2.70 A, runner ILE96 @ 3.21 A
+        # (gap 0.51): a robust, single-answer contact question -- what the ring F points
+        # into -- pairing with probe-1's NH2 hinge anchor (ASP93).
+        {"kind": "nearest", "smarts": "[F]", "group": "ring fluorine"},
     ],
     "ada": [
         {
