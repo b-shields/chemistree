@@ -541,7 +541,13 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "parp1": [
         {"kind": "nearest", "smarts": "[NX3H2][CX3]=O", "group": "primary carboxamide"},
-        {"kind": "count", "smarts": "[NX3H2][CX3]=O", "group": "primary carboxamide"},
+        # Nearest, not count: the within-4.0-A count (=4) was boundary-brittle --
+        # SER243 sits at 4.02 A, only 0.02 A outside the cutoff, a coin-flip integer;
+        # and the carboxamide's nearest (GLY202) just duplicates probe-1. The aryl
+        # fluorine's nearest residue is TYR235 @ 2.98 A, runner GLY227 @ 4.02 A
+        # (gap 1.05): which residue the F vector points into -- a distinct, robust,
+        # single-answer contact question, mirroring the hs90a ring-F nearest probe.
+        {"kind": "nearest", "smarts": "[F]", "group": "aryl fluorine"},
     ],
     "hs90a": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
