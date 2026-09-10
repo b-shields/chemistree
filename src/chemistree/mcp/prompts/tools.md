@@ -28,6 +28,11 @@ final molecule, if you built or changed a named ring, run this check once more �
 reported locants or call `matches` — and do not finish with a ring or substituent you have not
 verified against the request.
 
+Report your final SMILES by calling the `smiles` tool and copying its output **exactly**.
+Never type, transcribe, or hand-edit a SMILES for the final answer — re-drawing a molecule by
+hand risks a mis-placed atom or a broken ring closure. The `smiles` tool always returns the
+valid canonical SMILES of the molecule you actually built; that exact string is the answer.
+
 # Reading the pocket and the score
 
 When a request names a residue, call distance to see which group is closest, or contacts to

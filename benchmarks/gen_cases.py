@@ -496,7 +496,25 @@ def count_answer(
 _PROBES: dict[str, list[dict]] = {
     "egfr": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
-        {"kind": "count", "smarts": "[F]", "group": "benzyl fluorine"},
+        # Nearest, not count: the within-4.0-A benzyl-fluorine count (=5) was
+        # boundary-brittle -- the 5th residue sits only 0.10 A inside the 4.0 cutoff,
+        # a coin-flip integer. The fluorine itself has no clean nearest (its vector
+        # points between THR790/ARG776/ASP855, gap <0.1). The benzene ring that bears
+        # it is chemistree group [2] (the 6 ring carbons; the F is a separate leaf), so
+        # it is cleanly addressable with residues_near; its nearest residue is ASP855 @
+        # 2.87 A, runner PHE856 @ 3.19 A (gap 0.32): which residue the pendant
+        # fluorophenyl ring packs against -- the DFG-motif aspartate at the back of the
+        # hydrophobic pocket, a distinct, single-answer contact question pairing with
+        # probe-1's hinge NH2 (MET793). The recursive SMARTS selects exactly the 6 ring
+        # carbons of the fluorine-bearing benzene (excluding F, matching group [2]).
+        {
+            "kind": "nearest",
+            "smarts": (
+                "[cX3;$(c1([F])ccccc1),$(c1c([F])cccc1),"
+                "$(c1cc([F])ccc1),$(c1ccc([F])cc1)]"
+            ),
+            "group": "benzene ring that bears the fluorine",
+        },
     ],
     "aa2ar": [
         # Nearest, not count: the within-4.0-A count (=4) was boundary-brittle --
@@ -505,7 +523,12 @@ _PROBES: dict[str, list[dict]] = {
         # 3.43 A (gap 0.42): the canonical A2A recognition H-bond -- which residue
         # anchors the exocyclic amine -- mirroring the egfr/hs90a NH2-hinge probes.
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
-        {"kind": "count", "smarts": "o1cccc1", "group": "furan ring"},
+        # aa2ar has only one robust proximity question. The furan "how buried" count
+        # is boundary-brittle (margin 0.298 A at the 4.0 cutoff) and it has no distinct
+        # clean nearest: every candidate group's nearest is either ASN253 (duplicating
+        # p1) or has a <0.30 A gap (phenol ring 0.28, phenol OH 0.27, core 0.22). Rather
+        # than cherry-pick a 4.1 A cutoff or ship a coin-flip integer, drop it -- a
+        # smaller honest probe set beats a padded one.
     ],
     "andr": [
         # Nearest, not count: the within-4.0-A A-ring ketone count (=5) was the
