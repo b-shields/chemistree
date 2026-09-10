@@ -1,1 +1,0 @@
-{"id": "abl1", "target": "tests/data/abl1/reference.sdf", "receptor": "tests/data/abl1/receptor.pdb", "instruction": "Optimize the ligand to improve predicted binding."}
