@@ -492,7 +492,99 @@ def count_answer(
     return str(n)
 
 
-# (kind, smarts, description, question). kind: nearest | count | count_name(prefixes).
+# Receptor hydrogen-bond partners, by heavy atom. A donor bears an H: any N, and the
+# Ser/Thr/Tyr hydroxyl O. An acceptor has a lone pair: any O, and a side-chain N (the
+# backbone amide N, atom name "N", is a donor, not an acceptor).
+_DONOR_OH = frozenset({"OG", "OG1", "OH", "OW"})
+
+
+def _feature_oxygens(sdf: str, smarts: str) -> np.ndarray:
+    """Coordinates of the oxygen atoms of the ligand feature matching ``smarts``."""
+    lig = Chem.MolFromMolFile(sdf, removeHs=False)
+    conf = lig.GetConformer()
+    pts = [
+        (p.x, p.y, p.z)
+        for match in lig.GetSubstructMatches(Chem.MolFromSmarts(smarts))
+        for i in match
+        if lig.GetAtomWithIdx(i).GetSymbol() == "O"
+        for p in [conf.GetAtomPosition(i)]
+    ]
+    assert pts, f"{smarts!r}: no oxygen matched in {sdf}"
+    return np.array(pts)
+
+
+def _receptor_partners(pdb: str, role: str) -> np.ndarray:
+    """Heavy-atom coordinates of the receptor's hydrogen-bond ``role`` atoms.
+
+    Args:
+        pdb: Receptor PDB path.
+        role: ``"donor"`` (N, or Ser/Thr/Tyr hydroxyl O) or ``"acceptor"`` (any O, or a
+            side-chain N).
+
+    Returns:
+        An (N, 3) array of the qualifying heavy atoms' coordinates.
+    """
+    rec = Chem.MolFromPDBFile(pdb, removeHs=False, sanitize=False)
+    conf = rec.GetConformer()
+    pts = []
+    for atom in rec.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None or info.GetResidueName().strip() not in _AA:
+            continue
+        el, name = atom.GetSymbol(), info.GetName().strip()
+        if role == "donor":
+            ok = el == "N" or (el == "O" and name in _DONOR_OH)
+        else:
+            ok = el == "O" or (el == "N" and name != "N")
+        if ok:
+            p = conf.GetAtomPosition(atom.GetIdx())
+            pts.append((p.x, p.y, p.z))
+    return np.array(pts)
+
+
+def hbond_answer(
+    target: str,
+    smarts: str,
+    role: str,
+    *,
+    cutoff: float = 3.5,
+    margin: float = 0.30,
+) -> str:
+    """Whether the ligand feature can hydrogen-bond a receptor partner, ``yes``/``no``.
+
+    Measured heavy atom to heavy atom -- the donor--acceptor definition of a hydrogen
+    bond -- from the feature's oxygen(s) to the nearest receptor ``role`` heavy atom.
+    Carbons and hydrogens never decide the answer, so a close carbon cannot pass for a
+    hydrogen bond.
+
+    Args:
+        target: Benchmark target key.
+        smarts: SMARTS selecting the ligand feature; its oxygens are measured from.
+        role: The receptor partner sought -- ``"donor"`` for an acceptor feature (e.g. a
+            carbonyl O), ``"acceptor"`` for a donor feature (e.g. a hydroxyl).
+        cutoff: Hydrogen-bond distance in Angstrom (heavy atom to heavy atom).
+        margin: The deciding partner must clear ``cutoff`` by this much, so a borderline
+            contact cannot flip the answer.
+
+    Returns:
+        ``"yes"`` if a partner is clearly within ``cutoff``, else ``"no"``.
+
+    Raises:
+        AssertionError: If the nearest partner sits within ``margin`` of ``cutoff`` (an
+            ambiguous, non-air-tight probe is refused, not shipped).
+    """
+    feat = _feature_oxygens(MANIFEST[target]["reference"], smarts)
+    nearest = _mindist(feat, _receptor_partners(MANIFEST[target]["receptor"], role))
+    if nearest <= cutoff - margin:
+        return "yes"
+    assert nearest >= cutoff + margin, (
+        f"{target}: nearest {role} at {nearest:.2f} A is within {margin} A of the "
+        f"{cutoff} A cutoff -- ambiguous, not air-tight"
+    )
+    return "no"
+
+
+# (kind, smarts, description, question). kind: nearest | count | count_name | hbond.
 _PROBES: dict[str, list[dict]] = {
     "egfr": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
@@ -531,43 +623,28 @@ _PROBES: dict[str, list[dict]] = {
         # smaller honest probe set beats a padded one.
     ],
     "andr": [
-        # Nearest, not count: the within-4.0-A A-ring ketone count (=5) was the
-        # thinnest steroid case -- the 5th residue sits only 0.06 A inside the 4.0
-        # cutoff, a coin-flip integer, and the 3-keto's own nearest is a coin-flip
-        # (bidentate: ARG752 2.19 vs GLN711 2.30, gap 0.12). The C19 angular methyl
-        # is a clean chemistree leaf group (the methyl on the ring-junction carbon
-        # adjacent to the A-ring enone); its nearest residue is MET745 @ 3.52 A,
-        # runner TRP741 @ 3.86 A (gap 0.34): which residue the 10-beta angular methyl
-        # packs against -- a robust, single-answer steric-SAR question (the C19
-        # methyl defines the steroid beta-face and drives AR selectivity; cf.
-        # 19-nortestosterone/nandrolone), distinct from probe-2's C18 methyl
-        # (THR877). The recursive SMARTS matches only the methyl carbon on the
-        # ring-junction carbon bonded to the enone C=C.
+        # Two hydrogen-bond yes/no probes on the steroid's polar anchors. Nearest-
+        # residue framing is a coin-flip here (both anchors are bidentate: 3-keto
+        # ARG752 2.19 vs GLN711 2.30, gap 0.12; 17-OH ASN705 2.66 vs THR877 2.75, gap
+        # 0.09), and the two angular methyls are indistinguishable by the tools.
+        # Whether each anchor can hydrogen-bond is unambiguous and tool-answerable:
+        # residues_near on the feature oxygen lists the partner residue well within
+        # 3.5 A (carbonyl O -> ARG752 donor N 2.82; 17-OH -> ASN705 acceptor O 2.66),
+        # a >=0.3 A margin below the cutoff. Gold is heavy atom to heavy atom (the
+        # donor--acceptor definition of a hydrogen bond); both are yes.
         {
-            "kind": "nearest",
-            "smarts": "[CH3;$([CH3][CX4]([CX4])([CX4])[CX3]=[CX3])]",
-            "group": (
-                "C19 angular methyl (the methyl on the ring-junction carbon "
-                "adjacent to the A-ring enone)"
-            ),
+            "kind": "hbond",
+            "smarts": "[#6]=[OX1]",
+            "role": "donor",
+            "feature": "A-ring ketone carbonyl oxygen",
+            "partner": "donor (a backbone or side-chain N-H or O-H)",
         },
-        # Nearest, not count: the within-4.0-A 17-hydroxyl count (=3) was
-        # boundary-brittle -- LEU701 sits at 4.18 A, only 0.18 A outside the cutoff,
-        # and the hydroxyl's own nearest is a coin-flip (ASN705 2.66 vs THR877 2.75,
-        # both bidentate H-bond partners, gap 0.09). The C18 angular methyl is a clean
-        # chemistree leaf group; its nearest residue is THR877 @ 2.51 A, runner MET742
-        # @ 3.75 A (gap 1.24): which residue the D-ring angular methyl packs against --
-        # a robust, single-answer steric-SAR question (angular-methyl beta-face
-        # contacts drive steroid selectivity; cf. 19-nortestosterone), distinct from
-        # probe-1's A-ring ketone. The recursive SMARTS matches only the methyl carbon
-        # on the ring-junction carbon of the 17-hydroxyl-bearing ring.
         {
-            "kind": "nearest",
-            "smarts": "[CH3;$([CH3][CX4]([CX4])([CX4])[CX4][OX2H])]",
-            "group": (
-                "C18 angular methyl (the methyl on the ring-junction carbon of the "
-                "ring that bears the 17-hydroxyl)"
-            ),
+            "kind": "hbond",
+            "smarts": "[OX2H]",
+            "role": "acceptor",
+            "feature": "17-hydroxyl oxygen",
+            "partner": "acceptor (a backbone carbonyl O, or a side-chain O or N)",
         },
     ],
     "hivpr": [
@@ -677,6 +754,12 @@ def probes(target: str) -> list[dict]:
                 f"ligand's {p['group']}?"
             )
             ans = count_answer(target, p["smarts"])
+        elif p["kind"] == "hbond":
+            q = (
+                f"Is a receptor hydrogen-bond {p['partner']} within 3.5 Angstrom of "
+                f"the ligand's {p['feature']}? Answer yes or no."
+            )
+            ans = hbond_answer(target, p["smarts"], p["role"])
         else:  # count_name
             q = (
                 f"How many {p['resname']} residues have any atom within 4.0 Angstrom "
