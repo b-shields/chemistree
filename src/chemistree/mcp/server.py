@@ -157,8 +157,8 @@ def build_server(*, profile: str = "all", trace_path: str | None = None):
         prime=os.environ.get(_PRIME_ENV) == "1", trace_path=trace_path
     )
     # Server-level guidance so `claude mcp add chemistree` self-describes. Clients
-    # surface it to the model as context (soft — see PLAN.md); the benchmark also
-    # delivers it authoritatively via --append-system-prompt.
+    # surface it to the model as context (soft); the benchmark also delivers it
+    # authoritatively via --append-system-prompt.
     mcp = FastMCP("chemistree", instructions=guidance.chemistree_guidance())
 
     @mcp.tool

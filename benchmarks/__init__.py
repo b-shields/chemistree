@@ -2,5 +2,5 @@
 
 Runs headless Claude Code once per case, in an isolated context session, and
 records per-case metrics (token footprint, cost, turns) and the final molecule.
-See ``PLAN.md`` for the design.
+See ``README.md`` for the design.
 """

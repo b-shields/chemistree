@@ -1,9 +1,9 @@
 # chemistree benchmarks
 
 Compares an agent **with** chemistree against the same model **without** it, on
-chemical-structure tasks. See [`PLAN.md`](PLAN.md) for the full design (tracks, arms,
-scoring, fairness, and the DUD-Z expansion planned next). This README covers setup, how to
-run the harness, and the full results (ten DUD-Z targets plus the abl1 development case).
+chemical-structure tasks. This README covers the design (tracks, arms, scoring, fairness),
+the setup and how to run the harness, and the full results (ten DUD-Z targets plus the abl1
+development case).
 
 ## Arms
 
@@ -181,8 +181,7 @@ accuracy, 3D completion, probe accuracy) from sampling noise, but the 3D binding
 means aggregate 22 rows, so read small differences there loosely. haiku is stochastic: four 2D
 cases (`aa2ar/sub-methoxy`, `nram/sub-nmethyl`, `hs90a/grow-dimethylamino`,
 `abl1/sub-ring-to-pyridine`) are each solved on one of the two samples — every 2D case is solved
-at least once, so these are variance, not a tool limit. **Next:** an n ≥ 3 pass for tighter 3D magnitude, and a sonnet pass. See
-[`PLAN.md`](PLAN.md).
+at least once, so these are variance, not a tool limit. **Next:** an n ≥ 3 pass for tighter 3D magnitude, and a sonnet pass.
 
 **Probe soundness.** The 20 probes are the ones that survive a four-part audit — a question a
 medicinal chemist actually asks, one defensible answer, an independently-computed gold, and an
