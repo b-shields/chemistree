@@ -217,7 +217,7 @@ def edits_2d(target: str) -> list[dict]:
                 "core-triazine",
                 "core_hopping",
                 "Aza-substitute the aminopyrimidine CH between the two ring nitrogens, "
-                "making a 1,3,5-triazine.",
+                "making a 1,2,3-triazine.",
                 aza(s, only(m, "[cH1](:n):n")),
             ),
         ]
@@ -396,7 +396,13 @@ def edits_2d(target: str) -> list[dict]:
 
 # --- probe answers (independent of chemistree: raw RDKit + numpy) --------------------
 def _receptor_residues(pdb: str) -> dict[str, np.ndarray]:
-    """Group receptor atoms into standard-AA residues, label -> (K,3) coords."""
+    """Group receptor atoms into standard-AA residues, label -> (K,3) coords.
+
+    The label is ``NAME + number + "/" + chain`` so a homodimer's two copies of a
+    residue (e.g. PRO81/A and PRO81/C) stay distinct. Keying only by name+number
+    would collapse them (last write wins), corrupting both the residue's coordinates
+    and any per-residue count.
+    """
     rec = Chem.MolFromPDBFile(pdb, removeHs=False, sanitize=False)
     conf = rec.GetConformer()
     groups: dict[tuple, list] = defaultdict(list)
@@ -411,7 +417,7 @@ def _receptor_residues(pdb: str) -> dict[str, np.ndarray]:
         )
         pos = conf.GetAtomPosition(atom.GetIdx())
         groups[key].append((pos.x, pos.y, pos.z))
-    return {f"{k[2]}{k[1]}": np.array(v) for k, v in groups.items()}
+    return {f"{k[2]}{k[1]}/{k[0]}": np.array(v) for k, v in groups.items()}
 
 
 def _group_coords(sdf: str, smarts: str) -> np.ndarray:
@@ -438,12 +444,35 @@ def _distances(target: str, smarts: str) -> list[tuple[float, str]]:
     return sorted((_mindist(c, coords), label) for label, c in res.items())
 
 
+def _name_num(label: str) -> str:
+    """The ``NAME+number`` part of a residue label, dropping the ``/chain`` suffix."""
+    return label.split("/")[0]
+
+
 def nearest_answer(target: str, smarts: str, *, min_margin: float = 0.30) -> str:
-    """The nearest residue label; assert the runner-up is comfortably farther."""
+    """The nearest residue's name+number; assert the runner-up is comfortably farther.
+
+    Args:
+        target: Benchmark target key.
+        smarts: SMARTS selecting the ligand group to measure from.
+        min_margin: Minimum gap (Angstrom) to the nearest residue of a *different*
+            name+number. A same-name copy on another chain is not a competing
+            answer, so it does not shrink the margin.
+
+    Returns:
+        The winning residue as ``NAME+number`` (e.g. ``ILE50``), matching the
+        question's requested format.
+
+    Raises:
+        AssertionError: If the margin to the next distinct residue is below
+            ``min_margin`` (a coin-flip nearest is refused, not shipped).
+    """
     ds = _distances(target, smarts)
-    margin = ds[1][0] - ds[0][0]
+    winner = _name_num(ds[0][1])
+    runner = next(d for d, lab in ds[1:] if _name_num(lab) != winner)
+    margin = runner - ds[0][0]
     assert margin >= min_margin, f"{target}: nearest margin {margin:.2f} too small"
-    return ds[0][1]
+    return winner
 
 
 def count_answer(
@@ -463,30 +492,196 @@ def count_answer(
     return str(n)
 
 
-# (kind, smarts, description, question). kind: nearest | count | count_name(prefixes).
+# Receptor hydrogen-bond partners, by heavy atom. A donor bears an H: any N, and the
+# Ser/Thr/Tyr hydroxyl O. An acceptor has a lone pair: any O, and a side-chain N (the
+# backbone amide N, atom name "N", is a donor, not an acceptor).
+_DONOR_OH = frozenset({"OG", "OG1", "OH", "OW"})
+
+
+def _feature_oxygens(sdf: str, smarts: str) -> np.ndarray:
+    """Coordinates of the oxygen atoms of the ligand feature matching ``smarts``."""
+    lig = Chem.MolFromMolFile(sdf, removeHs=False)
+    conf = lig.GetConformer()
+    pts = [
+        (p.x, p.y, p.z)
+        for match in lig.GetSubstructMatches(Chem.MolFromSmarts(smarts))
+        for i in match
+        if lig.GetAtomWithIdx(i).GetSymbol() == "O"
+        for p in [conf.GetAtomPosition(i)]
+    ]
+    assert pts, f"{smarts!r}: no oxygen matched in {sdf}"
+    return np.array(pts)
+
+
+def _receptor_partners(pdb: str, role: str) -> np.ndarray:
+    """Heavy-atom coordinates of the receptor's hydrogen-bond ``role`` atoms.
+
+    Args:
+        pdb: Receptor PDB path.
+        role: ``"donor"`` (N, or Ser/Thr/Tyr hydroxyl O) or ``"acceptor"`` (any O, or a
+            side-chain N).
+
+    Returns:
+        An (N, 3) array of the qualifying heavy atoms' coordinates.
+    """
+    rec = Chem.MolFromPDBFile(pdb, removeHs=False, sanitize=False)
+    conf = rec.GetConformer()
+    pts = []
+    for atom in rec.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None or info.GetResidueName().strip() not in _AA:
+            continue
+        el, name = atom.GetSymbol(), info.GetName().strip()
+        if role == "donor":
+            ok = el == "N" or (el == "O" and name in _DONOR_OH)
+        else:
+            ok = el == "O" or (el == "N" and name != "N")
+        if ok:
+            p = conf.GetAtomPosition(atom.GetIdx())
+            pts.append((p.x, p.y, p.z))
+    return np.array(pts)
+
+
+def hbond_answer(
+    target: str,
+    smarts: str,
+    role: str,
+    *,
+    cutoff: float = 3.5,
+    margin: float = 0.30,
+) -> str:
+    """Whether the ligand feature can hydrogen-bond a receptor partner, ``yes``/``no``.
+
+    Measured heavy atom to heavy atom -- the donor--acceptor definition of a hydrogen
+    bond -- from the feature's oxygen(s) to the nearest receptor ``role`` heavy atom.
+    Carbons and hydrogens never decide the answer, so a close carbon cannot pass for a
+    hydrogen bond.
+
+    Args:
+        target: Benchmark target key.
+        smarts: SMARTS selecting the ligand feature; its oxygens are measured from.
+        role: The receptor partner sought -- ``"donor"`` for an acceptor feature (e.g. a
+            carbonyl O), ``"acceptor"`` for a donor feature (e.g. a hydroxyl).
+        cutoff: Hydrogen-bond distance in Angstrom (heavy atom to heavy atom).
+        margin: The deciding partner must clear ``cutoff`` by this much, so a borderline
+            contact cannot flip the answer.
+
+    Returns:
+        ``"yes"`` if a partner is clearly within ``cutoff``, else ``"no"``.
+
+    Raises:
+        AssertionError: If the nearest partner sits within ``margin`` of ``cutoff`` (an
+            ambiguous, non-air-tight probe is refused, not shipped).
+    """
+    feat = _feature_oxygens(MANIFEST[target]["reference"], smarts)
+    nearest = _mindist(feat, _receptor_partners(MANIFEST[target]["receptor"], role))
+    if nearest <= cutoff - margin:
+        return "yes"
+    assert nearest >= cutoff + margin, (
+        f"{target}: nearest {role} at {nearest:.2f} A is within {margin} A of the "
+        f"{cutoff} A cutoff -- ambiguous, not air-tight"
+    )
+    return "no"
+
+
+# (kind, smarts, description, question). kind: nearest | count | count_name | hbond.
 _PROBES: dict[str, list[dict]] = {
     "egfr": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
-        {"kind": "count", "smarts": "[F]", "group": "benzyl fluorine"},
+        # Nearest, not count: the within-4.0-A benzyl-fluorine count (=5) was
+        # boundary-brittle -- the 5th residue sits only 0.10 A inside the 4.0 cutoff,
+        # a coin-flip integer. The fluorine itself has no clean nearest (its vector
+        # points between THR790/ARG776/ASP855, gap <0.1). The benzene ring that bears
+        # it is chemistree group [2] (the 6 ring carbons; the F is a separate leaf), so
+        # it is cleanly addressable with residues_near; its nearest residue is ASP855 @
+        # 2.87 A, runner PHE856 @ 3.19 A (gap 0.32): which residue the pendant
+        # fluorophenyl ring packs against -- the DFG-motif aspartate at the back of the
+        # hydrophobic pocket, a distinct, single-answer contact question pairing with
+        # probe-1's hinge NH2 (MET793). The recursive SMARTS selects exactly the 6 ring
+        # carbons of the fluorine-bearing benzene (excluding F, matching group [2]).
+        {
+            "kind": "nearest",
+            "smarts": (
+                "[cX3;$(c1([F])ccccc1),$(c1c([F])cccc1),"
+                "$(c1cc([F])ccc1),$(c1ccc([F])cc1)]"
+            ),
+            "group": "benzene ring that bears the fluorine",
+        },
     ],
     "aa2ar": [
-        {"kind": "count", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
-        {"kind": "count", "smarts": "[o]", "group": "furan ring"},
+        # Nearest, not count: the within-4.0-A count (=4) was boundary-brittle --
+        # PHE168 sits at 3.77 A, only 0.23 A inside the 4.0 cutoff, a coin-flip integer.
+        # The exocyclic amine's nearest residue is ASN253 @ 3.01 A, runner GLU169 @
+        # 3.43 A (gap 0.42): the canonical A2A recognition H-bond -- which residue
+        # anchors the exocyclic amine -- mirroring the egfr/hs90a NH2-hinge probes.
+        {"kind": "nearest", "smarts": "[NX3H2]", "group": "exocyclic amino (NH2)"},
+        # aa2ar has only one robust proximity question. The furan "how buried" count
+        # is boundary-brittle (margin 0.298 A at the 4.0 cutoff) and it has no distinct
+        # clean nearest: every candidate group's nearest is either ASN253 (duplicating
+        # p1) or has a <0.30 A gap (phenol ring 0.28, phenol OH 0.27, core 0.22). Rather
+        # than cherry-pick a 4.1 A cutoff or ship a coin-flip integer, drop it -- a
+        # smaller honest probe set beats a padded one.
     ],
     "andr": [
-        {"kind": "count", "smarts": "[#6]=O", "group": "A-ring ketone oxygen"},
-        {"kind": "count", "smarts": "[OX2H]", "group": "17-hydroxyl"},
+        # Two hydrogen-bond yes/no probes on the steroid's polar anchors. Nearest-
+        # residue framing is a coin-flip here (both anchors are bidentate: 3-keto
+        # ARG752 2.19 vs GLN711 2.30, gap 0.12; 17-OH ASN705 2.66 vs THR877 2.75, gap
+        # 0.09), and the two angular methyls are indistinguishable by the tools.
+        # Whether each anchor can hydrogen-bond is unambiguous and tool-answerable:
+        # residues_near on the feature oxygen lists the partner residue well within
+        # 3.5 A (carbonyl O -> ARG752 donor N 2.82; 17-OH -> ASN705 acceptor O 2.66),
+        # a >=0.3 A margin below the cutoff. Gold is heavy atom to heavy atom (the
+        # donor--acceptor definition of a hydrogen bond); both are yes.
+        {
+            "kind": "hbond",
+            "smarts": "[#6]=[OX1]",
+            "role": "donor",
+            "feature": "A-ring ketone carbonyl oxygen",
+            "partner": "donor (a backbone or side-chain N-H or O-H)",
+        },
+        {
+            "kind": "hbond",
+            "smarts": "[OX2H]",
+            "role": "acceptor",
+            "feature": "17-hydroxyl oxygen",
+            "partner": "acceptor (a backbone carbonyl O, or a side-chain O or N)",
+        },
     ],
     "hivpr": [
         {"kind": "nearest", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
-        {"kind": "count", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
+        # Nearest, not count: the sulfonyl count was boundary-brittle (ILE50 at
+        # 4.28 A, margin 0.28) and "the sulfonyl group" (S+2O) is not a resolvable
+        # target -- the group decomposition lumps it into the whole
+        # sulfonamide+isobutyl. The pyrrolidine ring is a clean group, and its nearest
+        # residue is the catalytic ASP25 (gap 0.75): the canonical HIV-protease core
+        # question, pairing with the flap contact in probe-1.
+        {
+            "kind": "nearest",
+            "smarts": "[NX3;R][CX4;R][CX4;R][CX4;R][CX4;R]",
+            "group": "pyrrolidine ring",
+        },
     ],
     "fa10": [
         {"kind": "nearest", "smarts": "[OX2H]", "group": "secondary alcohol hydroxyl"},
-        {"kind": "count", "smarts": "[Cl]", "group": "naphthalene chlorine"},
+        # Nearest, not count: the within-4.0-A naphthalene-chlorine count (=6) was
+        # boundary-brittle -- the 6th residue sits only ~0.08 A inside the 4.0
+        # cutoff, a coin-flip integer. The sulfone linker is chemistree group [4]
+        # "sulfonyl" (exactly S+2O -- a sulfone S-C,S-C is isolated cleanly, unlike
+        # a sulfonamide); its nearest residue is GLN192 @ 2.64 A, runner CYX220 @
+        # 3.16 A (gap 0.52): which residue the sulfonyl linker packs against -- a
+        # distinct, robust, single-answer contact question at the fXa S1/S4 junction,
+        # pairing with probe-1's hydroxyl anchor (GLY216).
+        {"kind": "nearest", "smarts": "[SX4](=O)(=O)", "group": "sulfonyl group"},
     ],
     "hdac8": [
-        {"kind": "count", "smarts": "[NX3][OX2H]", "group": "hydroxamic acid"},
+        # Nearest, not count: the within-4.0-A hydroxamic count (=8) was
+        # boundary-brittle -- the 8th residue sits only 0.23 A inside the 4.0 cutoff,
+        # a coin-flip integer. The warhead is still probed by probe-2 (its histidine
+        # count). The N-methylpyrrole scaffold's ring is chemistree group [1]
+        # "pyrrole"; its nearest residue is PHE208 @ 3.27 A, runner ASP101 @ 3.68 A
+        # (gap 0.41): which residue the central scaffold ring packs against -- a
+        # distinct, robust, single-answer contact question.
+        {"kind": "nearest", "smarts": "n1cccc1", "group": "pyrrole ring"},
         {
             "kind": "count_name",
             "smarts": "[NX3][OX2H]",
@@ -497,11 +692,22 @@ _PROBES: dict[str, list[dict]] = {
     ],
     "parp1": [
         {"kind": "nearest", "smarts": "[NX3H2][CX3]=O", "group": "primary carboxamide"},
-        {"kind": "count", "smarts": "[NX3H2][CX3]=O", "group": "primary carboxamide"},
+        # Nearest, not count: the within-4.0-A count (=4) was boundary-brittle --
+        # SER243 sits at 4.02 A, only 0.02 A outside the cutoff, a coin-flip integer;
+        # and the carboxamide's nearest (GLY202) just duplicates probe-1. The aryl
+        # fluorine's nearest residue is TYR235 @ 2.98 A, runner GLY227 @ 4.02 A
+        # (gap 1.05): which residue the F vector points into -- a distinct, robust,
+        # single-answer contact question, mirroring the hs90a ring-F nearest probe.
+        {"kind": "nearest", "smarts": "[F]", "group": "aryl fluorine"},
     ],
     "hs90a": [
         {"kind": "nearest", "smarts": "[NX3H2]", "group": "aminopyrimidine NH2"},
-        {"kind": "count", "smarts": "[F]", "group": "ring fluorine"},
+        # Nearest, not count: the within-4.0-A count (=5) was boundary-brittle --
+        # MET98 sits at 3.88 A, only 0.12 A inside the 4.0 cutoff, a coin-flip integer.
+        # The ring fluorine's nearest residue is GLY97 @ 2.70 A, runner ILE96 @ 3.21 A
+        # (gap 0.51): a robust, single-answer contact question -- what the ring F points
+        # into -- pairing with probe-1's NH2 hinge anchor (ASP93).
+        {"kind": "nearest", "smarts": "[F]", "group": "ring fluorine"},
     ],
     "ada": [
         {
@@ -509,7 +715,14 @@ _PROBES: dict[str, list[dict]] = {
             "smarts": "[NX3H2][CX3]=O",
             "group": "imidazole carboxamide",
         },
-        {"kind": "count", "smarts": "[OX2H]", "group": "secondary alcohol hydroxyl"},
+        # Naphthalene, not the hydroxyl: the within-4.0-A hydroxyl count (=5) was
+        # boundary-brittle -- ARG101 sits 0.05 A outside and TYR102 0.09 A inside the
+        # 4.0 cutoff, a coin-flip integer. The naphthalene is chemistree group [0]
+        # (a clean 10-atom leaf); its within-4.0-A count is 7 with a 0.33 A margin
+        # (LEU58 the nearest excluded residue at 4.74 A): how buried the hydrophobic
+        # naphthalene anchor is -- a robust contact census, distinct from probe-1's
+        # carboxamide anchor (ASP296).
+        {"kind": "count", "smarts": "c1ccc2ccccc2c1", "group": "naphthalene ring"},
     ],
     "nram": [
         {"kind": "count", "smarts": "[CX3](=O)[OX2H]", "group": "carboxylic acid"},
@@ -541,6 +754,12 @@ def probes(target: str) -> list[dict]:
                 f"ligand's {p['group']}?"
             )
             ans = count_answer(target, p["smarts"])
+        elif p["kind"] == "hbond":
+            q = (
+                f"Is a receptor hydrogen-bond {p['partner']} within 3.5 Angstrom of "
+                f"the ligand's {p['feature']}? Answer yes or no."
+            )
+            ans = hbond_answer(target, p["smarts"], p["role"])
         else:  # count_name
             q = (
                 f"How many {p['resname']} residues have any atom within 4.0 Angstrom "

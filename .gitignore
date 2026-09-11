@@ -185,3 +185,9 @@ PLAN.md
 
 # Driving-session notes (not versioned)
 TESTING_LOG*.md
+
+# Autonomous benchmark-optimization workspace (notes, throwaway scripts, run logs)
+optimize/
+
+# Local, per-user Claude Code settings (app runs pre-approve permissions here); not shared
+.claude/settings.local.json
