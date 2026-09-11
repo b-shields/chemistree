@@ -47,7 +47,7 @@ C="$REPO/benchmarks/cases"
 
 TARGETS=("$@")
 [ ${#TARGETS[@]} -eq 0 ] && \
-  TARGETS=(egfr aa2ar andr hivpr fa10 hdac8 parp1 hs90a ada nram)
+  TARGETS=(egfr aa2ar andr hivpr fa10 hdac8 parp1 hs90a ada nram abl1)
 
 run() { conda run -n chemistree poetry run python -m benchmarks.run "$@" 2>&1 | grep -v DEPRECATION; }
 
