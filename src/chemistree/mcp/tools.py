@@ -71,15 +71,15 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
 
         Two ways to name the new group:
 
-        - A vendored ring by NAME with a port locant for each of the group's ports:
-          ``quinazoline 3@2 4@6`` puts port ``[3*]`` on the ring's 2-position and
-          ``[4*]`` on the 6-position (IUPAC numbering). Prefer this for any named
-          heterocycle — no ring SMILES to write, and an unknown name or a locant with
-          no free valence errors with the valid options.
+        - A vendored ring by NAME with a port locant for each of the group's ports,
+          ``<ring> <label>@<locant> …`` (IUPAC numbering): this puts port ``[label*]``
+          on the named ring position, with no ring SMILES to write. Prefer this for any
+          named heterocycle — an unknown name, or a locant with no free valence, errors
+          with the valid options.
         - A common name (``trifluoromethyl``) or a SMILES with one dummy ``[*]`` per
           attachment point — the general form for a ring not in the table or a custom
-          group. To place a port on a ring atom, branch it: ``[3*]c1ncc2cc([4*])ccc2n1``
-          is a quinazoline with ports on its 2- and 6-positions.
+          group. To place a port on a chosen ring atom, branch it onto that atom:
+          ``[3*]c1ccc([4*])cc1`` puts ``[3*]`` and ``[4*]`` para on a benzene ring.
 
         Either way, use the group's own port labels (from ``describe_group``) so each
         attachment keeps its place — bare ``[*]`` dummies are assigned in atom order and
@@ -155,9 +155,9 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
         """Check your work: search the current molecule for a substructure.
 
         Use this to make sure a heterocycle ring swap produced the correct cycle —
-        after building a quinazoline, ``matches("quinazoline")`` should report a
-        match; a quinoxaline would not. ``pattern`` is a heterocycle name (e.g.
-        ``"quinazoline"``, ``"oxazole"``) or a SMILES/SMARTS query. The result says
+        after building a pyrimidine, ``matches("pyrimidine")`` should report a
+        match; a pyrazine would not. ``pattern`` is a heterocycle name or a
+        SMILES/SMARTS query. The result says
         whether the whole molecule contains the pattern and which group contains it,
         and names the ring when the pattern is a known heterocycle.
 
@@ -206,17 +206,14 @@ def register(mcp: FastMCP, backend: Backend, *, profile: str = "all") -> None:
     ) -> str:
         """List the receptor residues a group (or one of its atoms) contacts.
 
-        The group-to-residues view: given a part of your own molecule, count or list
-        which residues are near it. It complements ``distance`` (a named residue →
-        each group) and ``contacts`` (the whole pocket → closest group per residue).
+        The group-to-residues view: given a part of your own molecule, list which
+        residues are near it. It complements ``distance`` (a named residue → each
+        group) and ``contacts`` (the whole pocket → closest group per residue).
         Unlike ``contacts``, it names *every* residue near the target, not just the
-        closest atom's — so this is the tool for a "how many / which residues are
-        within X of this chlorine?" question: read the top row for the nearest, or
-        count the rows for a total, and answer from this table, not from ``contacts``.
-        The table may list a metal ion, cofactor, or water (e.g. ZN, MG, HOH); those
-        are not amino-acid residues, so exclude them from a residue count. Omit
-        ``position_id`` to measure from the whole group, or pass a heavy-atom id (from
-        ``describe_group``) for one atom.
+        closest atom's, so use it for a part-specific reading rather than ``contacts``.
+        The table may list a metal ion, cofactor, or water (e.g. ZN, MG, HOH), which
+        are not amino-acid residues. Omit ``position_id`` to measure from the whole
+        group, or pass a heavy-atom id (from ``describe_group``) for one atom.
 
         Args:
             group_id: Group to measure from (from ``describe``).

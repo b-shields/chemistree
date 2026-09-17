@@ -19,12 +19,14 @@ Same model, same case; only the tool surface differs (see `arms.py`):
 benchmark measures, so we state it plainly. The chemistree arm's tools carry curated domain
 knowledge and structure: a vendored set of named heteroaromatic rings (name ⇄ canonical SMILES
 plus IUPAC numbering), a fragment-tree representation with stable atom and group ids, per-edit
-ring-position feedback, and a `matches` check. The agent builds a ring by name
-(`swap 0 quinazoline 3@2 4@6`) and is told where each substituent landed. The shared medchem
-prompt deliberately no longer lists ring SMILES, so the **generalist** and **naked** arms rely on
-the model's own chemistry knowledge to write those rings — the same knowledge chemistree supplies
-through its tools. The task prompt is still byte-identical across arms; the difference is exactly
-this tool-borne knowledge, which is the effect under test.
+ring-position feedback, and a `matches` check. The agent builds a ring by name and is told where
+each substituent landed. This ring table is the effect under test — so **no arm's prompt (the
+chemistree tool guidance included) hands a case-specific answer SMILES, a tautomer, or a ring
+size**, and the tool docstrings carry no procedure keyed to a benchmark question. Every arm,
+chemistree included, relies on the model's own chemistry knowledge to name the target ring; what
+chemistree adds is the tool that builds it by name and verifies where each substituent sits. The
+task prompt is byte-identical across arms; the difference is exactly this tool-borne structure,
+which is the effect under test.
 
 ## Setup
 
