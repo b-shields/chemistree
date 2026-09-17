@@ -59,6 +59,33 @@ def load_items(path: Path) -> list[dict]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
+def resume_plan(existing_rows: list[dict]) -> tuple[list[dict], set[tuple[str, int]]]:
+    """Split prior result rows into keepers and the (id, replicate) already done.
+
+    Makes a rerun idempotent: an api-error row (the CLI returned ``is_error``, e.g.
+    a spend or rate limit) is dropped so its sample runs again, and every other row
+    is a real result and is kept. Repeated ``(id, replicate)`` keys are collapsed.
+
+    Args:
+        existing_rows: Result rows previously written to the out file.
+
+    Returns:
+        ``(keepers, completed)`` — the rows to preserve, and the set of
+        ``(id, replicate)`` keys that need not run again.
+    """
+    keepers: list[dict] = []
+    completed: set[tuple[str, int]] = set()
+    for row in existing_rows:
+        if row.get("api_error") is True:
+            continue
+        key = (row["id"], row.get("replicate", 1))
+        if key in completed:
+            continue
+        completed.add(key)
+        keepers.append(row)
+    return keepers, completed
+
+
 def case_type(item: dict) -> str:
     """The case type: ``decorate`` (B1), ``probe`` (B2), or ``edit2d`` (Track A)."""
     if "target" in item:
@@ -504,7 +531,12 @@ def _score_3d(
 
 
 def main() -> None:
-    """Parse arguments and run every case of one arm, writing a result row each."""
+    """Parse arguments and run one arm's cases, writing a result row each.
+
+    Resumable: prior real results in the out file are kept and only the api-error
+    and never-run samples are redone. Stops gracefully on the first API error
+    (spend or rate limit) unless ``--no-stop-on-api-error`` is given.
+    """
     parser = argparse.ArgumentParser(description="Run a benchmark arm over cases.")
     parser.add_argument("--items", required=True, help="JSONL file of cases.")
     parser.add_argument(
@@ -546,6 +578,19 @@ def main() -> None:
         help="Ablation: skip the medchem guidance layer, isolating the representation "
         "from the prompt (decorate only).",
     )
+    parser.add_argument(
+        "--stop-on-api-error",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop gracefully on the first API error (spend or rate limit): keep the "
+        "rows already written and drop the failed sample, so a rerun resumes. On by "
+        "default; --no-stop-on-api-error runs every case regardless.",
+    )
+    parser.add_argument(
+        "--stop-flag",
+        help="Path to create when stopping on an API error, so a parent sweep can halt "
+        "too. Optional.",
+    )
     args = parser.parse_args()
 
     arm = arms.ARMS[args.arm]
@@ -560,9 +605,22 @@ def main() -> None:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Resume: preserve prior real results, retry only the api-error and never-run
+    # samples. The file is rewritten with the keepers, then appended to as we go.
+    prior = load_items(out) if out.exists() else []
+    keepers, completed = resume_plan(prior)
+    stop_flag = Path(args.stop_flag) if args.stop_flag else None
+    aborted = False
     with out.open("w") as handle:
+        for row in keepers:
+            handle.write(json.dumps(row) + "\n")
+        handle.flush()
         for item in items:
+            if aborted:
+                break
             for replicate in range(1, args.repeat + 1):
+                if (item["id"], replicate) in completed:
+                    continue
                 row = run_case(
                     arm,
                     item,
@@ -573,10 +631,24 @@ def main() -> None:
                     guidance_on=not args.no_guidance,
                     replicate=replicate,
                 )
+                if args.stop_on_api_error and row.get("api_error"):
+                    # Graceful stop on the first API error (spend or rate limit): keep
+                    # what is written, drop this failed sample, and signal the sweep. A
+                    # rerun resumes from here once the limit clears.
+                    print(
+                        f"[api_error] {item['id']} r{replicate} ({arm.name}) "
+                        "— stopping; rerun to resume"
+                    )
+                    if stop_flag is not None:
+                        stop_flag.touch()
+                    aborted = True
+                    break
                 handle.write(json.dumps(row) + "\n")
                 handle.flush()
                 tag = f"{row['id']} r{replicate}" if args.repeat > 1 else row["id"]
                 print(f"[{row['status']}] {tag} ({arm.name}) {_summary(row)}")
+    if aborted:
+        raise SystemExit(3)
 
 
 def _summary(row: dict) -> str:

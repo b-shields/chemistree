@@ -42,6 +42,7 @@ REPEAT="${REPEAT:-3}"     # samples/case: haiku is stochastic, so n=3 by default
 TIMEOUT="${TIMEOUT:-600}"
 MAXPAR="${MAXPAR:-10}"    # 0 = launch a whole target's batch at once; >0 caps concurrency
 OUT="${OUT:-$REPO/benchmarks/results/full}"
+STOP_FLAG="$OUT/.api_error_stop"   # a run.py touches this on the first API error; the sweep then halts
 TRACE_FLAG=""; [ "${TRACE:-0}" = "1" ] && TRACE_FLAG="--trace"
 C="$REPO/benchmarks/cases"
 
@@ -68,15 +69,22 @@ launch() {
   fi
   throttle
   run --items "$items" --arm "$arm" --model "$MODEL" --timeout "$TIMEOUT" \
-      --repeat "$REPEAT" $TRACE_FLAG "$@" --out "$out" > "$out.log" 2>&1 &
+      --repeat "$REPEAT" --stop-flag "$STOP_FLAG" $TRACE_FLAG "$@" --out "$out" > "$out.log" 2>&1 &
 }
 
 echo "targets: ${TARGETS[*]}  | model=$MODEL repeat=$REPEAT timeout=$TIMEOUT maxpar=$MAXPAR"
 echo "results -> $OUT"
+mkdir -p "$OUT"; rm -f "$STOP_FLAG"   # fresh sweep clears the api-error sentinel
 
 for target in "${TARGETS[@]}"; do
+  # Resumable + idempotent: reruns keep prior real results and redo only the api-error
+  # and never-run samples (run.py merges per --out), so we no longer wipe the dir.
+  if [ -f "$STOP_FLAG" ]; then
+    echo "########## API error hit — stopping before $target (rerun to resume) ##########"
+    break
+  fi
   D="$OUT/$target"
-  rm -rf "$D"; mkdir -p "$D"
+  mkdir -p "$D"
   echo "########## $target : launching batch ##########"
   # Each run.py handles the REPEAT samples internally, writing one row per sample to its
   # single out file (tagged with a 'replicate' index), so a whole target is 9 parallel
@@ -98,4 +106,8 @@ for target in "${TARGETS[@]}"; do
   wait   # finish this target's batch before starting the next
   echo "########## $target : done ##########"
 done
-echo "ALL TARGETS DONE -> $OUT"
+if [ -f "$STOP_FLAG" ]; then
+  echo "SWEEP STOPPED ON API ERROR -> rerun 'bash benchmarks/run_benchmark.sh' to resume where it left off"
+else
+  echo "ALL TARGETS DONE -> $OUT"
+fi

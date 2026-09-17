@@ -82,8 +82,13 @@ results/full/<target>/
   decorate_{generalist,chemistree}[_noguid].jsonl
 ```
 
-Old results are cleared per target on rerun (`run.py` overwrites each `--out`; the script
-`rm -rf`s each target dir first), so just re-run — no manual clearing.
+Runs are **resumable and idempotent**. Each `run.py` keeps the prior real results in its
+`--out` file and redoes only the samples that hit an **API error** (`is_error`, e.g. a spend
+or rate limit) or never ran, so a rerun fills the gaps rather than repeating everything. On
+the first API error a run **stops gracefully** — it preserves what it has, drops the failed
+sample, and touches `results/full/.api_error_stop`, which halts the sweep before the next
+target. Just re-run `run_benchmark.sh` (after the limit clears) to resume where it stopped;
+`--no-stop-on-api-error` runs every case regardless.
 
 **Regenerating the cases.** The case files, Murcko scaffold seeds, and probe answers are all
 produced by `python -m benchmarks.gen_cases` (reads `data/manifest.jsonl`). Golds and probe
